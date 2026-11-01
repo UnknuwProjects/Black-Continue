@@ -888,8 +888,14 @@ void DrawWeapons() {
         const char* name;  // brighter
         const char* hint;  // dim, beside it
     };
-    static const GroupTitle kGroupTitles[] = {{"SUPPORTED", "PRESS Y TO TAKE IT OFF"},
-                                              {"UNSUPPORTED (EXPERIMENTAL)", "SUPPRESSOR IS PERMANENT"}};
+    static const GroupTitle kGroupTitles[] = {{"SUPPORTED SUPPRESSOR", "PRESS Y TO TAKE IT OFF"},
+                                              {"UNSUPPORTED SUPPRESSOR", "EXPERIMENTAL"}};
+    // the second group has two blocks, each with a dim heading of its own
+    auto sub_title = [](const char* text) {
+        ImGui::PushStyleColor(ImGuiCol_Text, kDim);
+        ImGui::TextUnformatted(Ui(text).c_str());
+        ImGui::PopStyleColor();
+    };
     bool sound_only = false;
     int group = -1, column = 0, variant = -1;  // variant: 0 the plain guns, 1 those with the suppressor (code bit 0x100)
     for (size_t i = 0; i < v.choices.size(); i++) {
@@ -899,6 +905,7 @@ void DrawWeapons() {
             variant = (c.type & 0x100) ? 1 : 0;
             column = 0;
             ImGui::Dummy(ImVec2(0, ImGui::GetFontSize() * 0.25f));
+            if (group == 1) sub_title("WITH SUPPRESSOR (PERMANENT)");
         }
         if (c.group != group) {
             group = c.group;
@@ -912,6 +919,7 @@ void DrawWeapons() {
             ImGui::TextUnformatted(Ui(title.hint).c_str());
             ImGui::PopStyleColor();
             ImGui::Dummy(ImVec2(0, ImGui::GetFontSize() * 0.1f));
+            if (group == 1) sub_title("NO SUPPRESSOR");
         }
         if (column++ % kColumns) ImGui::SameLine();
         ImGui::PushID(c.type);
@@ -923,7 +931,7 @@ void DrawWeapons() {
     }
     if (sound_only) {  // the star of those labels, under the last block
         ImGui::PushStyleColor(ImGuiCol_Text, kDim);
-        ImGui::TextUnformatted(Ui("* SOUND ONLY").c_str());
+        ImGui::TextUnformatted(Ui("* SILENCED SOUND ONLY").c_str());
         ImGui::PopStyleColor();
     }
     Section("SUPPLIES");
