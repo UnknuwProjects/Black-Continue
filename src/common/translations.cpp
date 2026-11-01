@@ -100,6 +100,7 @@ constexpr Entry kEntries[] = {
     {"ANY WEAPON IN ANY LEVEL", {u"Toute arme dans tout niveau", u"Jede Waffe in jedem Level", u"Ogni arma in ogni livello", u"Cualquier arma en cualquier nivel", u"Senjata apa pun di level mana pun"}},
     {"BUTTON SKIN", {u"Apparence des boutons", u"Tasten-Design", u"Aspetto dei pulsanti", u"Diseño de botones", u"Skin tombol"}},
     {"HDR SHADER", {u"Shader HDR", u"HDR-Shader", u"Shader HDR", u"Shader HDR", u"Shader HDR"}},
+    {"SUPPRESSOR + MEDKITS", {u"Silencieux + trousses de soin", u"Schalldämpfer + Medikits", u"Silenziatore + kit medici", u"Silenciador + botiquines", u"Peredam + P3K"}},
     {"LIBRARIES", {u"Bibliothèques", u"Bibliotheken", u"Librerie", u"Bibliotecas", u"Pustaka"}},
     {"LIBRARY", {u"Bibliothèque", u"Bibliothek", u"Libreria", u"Biblioteca", u"Pustaka"}},
     {"REFERENCES", {u"Références", u"Referenzen", u"Riferimenti", u"Referencias", u"Referensi"}},
