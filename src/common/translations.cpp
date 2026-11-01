@@ -220,6 +220,16 @@ constexpr Entry kEntries[] = {
     {"FILL AMMUNITION", {{}, {}, {}, {}, u"Isi amunisi"}},
     {"Start or continue a level to choose its weapons.", {{}, {}, {}, {}, u"Mulai atau lanjutkan level untuk memilih senjata."}},
     {"A weapon replaces the one not in hand, gold names are held", {{}, {}, {}, {}, u"Senjata menggantikan yang tidak dipegang, nama emas sedang dipegang"}},
+    {"INFINITE MEDKITS", {{}, {}, {}, {}, u"P3K tak terbatas"}},
+    {"SUPPORTED SUPPRESSOR", {{}, {}, {}, {}, u"Peredam didukung"}},
+    {"UNSUPPORTED SUPPRESSOR", {{}, {}, {}, {}, u"Peredam tidak didukung"}},
+    {"PRESS Y TO TAKE IT OFF", {{}, {}, {}, {}, u"Tekan Y untuk melepas"}},
+    {"EXPERIMENTAL", {{}, {}, {}, {}, u"Eksperimental"}},
+    {"NO SUPPRESSOR", {{}, {}, {}, {}, u"Tanpa peredam"}},
+    {"WITH SUPPRESSOR (PERMANENT)", {{}, {}, {}, {}, u"Dengan peredam (permanen)"}},
+    {"* SILENCED SOUND ONLY", {{}, {}, {}, {}, u"* Hanya suara disenyapkan"}},
+    {"SUPPLIES", {{}, {}, {}, {}, u"Persediaan"}},
+    {"FILL MEDKITS", {{}, {}, {}, {}, u"Isi P3K"}},
 };
 
 bool Same(std::string_view a, std::string_view b) {
