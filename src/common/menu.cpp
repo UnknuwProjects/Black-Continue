@@ -884,13 +884,21 @@ void DrawWeapons() {
         const char* name;  // brighter
         const char* hint;  // dim, beside it
     };
-    static const GroupTitle kGroupTitles[] = {{"SUPPORTED", "SUPPRESSOR ON - PRESS Y TO TAKE IT OFF"},
-                                              {"UNSUPPORTED (EXPERIMENTAL)", "SUPPRESSOR CANNOT BE TAKEN OFF"}};
-    int group = -1, column = 0;
+    static const GroupTitle kGroupTitles[] = {{"SUPPORTED", "PRESS Y TO TAKE IT OFF"},
+                                              {"UNSUPPORTED (EXPERIMENTAL)", "SUPPRESSOR IS PERMANENT"}};
+    bool sound_only = false;
+    int group = -1, column = 0, variant = -1;  // variant: 0 the plain guns, 1 those with the suppressor (code bit 0x100)
     for (size_t i = 0; i < v.choices.size(); i++) {
         const weapons::Choice& c = v.choices[i];
+        if (c.group == group && variant != ((c.type & 0x100) ? 1 : 0)) {
+            // the second block of a group starts on a row of its own
+            variant = (c.type & 0x100) ? 1 : 0;
+            column = 0;
+            ImGui::Dummy(ImVec2(0, ImGui::GetFontSize() * 0.25f));
+        }
         if (c.group != group) {
             group = c.group;
+            variant = (c.type & 0x100) ? 1 : 0;
             column = 0;
             const GroupTitle& title = kGroupTitles[std::clamp(group, 0, 1)];
             ImGui::Dummy(ImVec2(0, ImGui::GetFontSize() * 0.4f));
@@ -907,6 +915,12 @@ void DrawWeapons() {
         if (ImGui::Button(c.label.c_str(), ImVec2(w, 0))) weapons::Give(c.type);
         if (c.held) ImGui::PopStyleColor();
         ImGui::PopID();
+        sound_only = sound_only || c.sound_only;
+    }
+    if (sound_only) {  // the star of those labels, under the last block
+        ImGui::PushStyleColor(ImGuiCol_Text, kDim);
+        ImGui::TextUnformatted(Ui("* SOUND ONLY").c_str());
+        ImGui::PopStyleColor();
     }
     Section("SUPPLIES");
     if (ImGui::Button(Ui("FILL AMMUNITION").c_str(), ImVec2(w, 0))) weapons::FillAmmo();
