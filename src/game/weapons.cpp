@@ -481,7 +481,7 @@ void Refresh() {
                 // group 1: the plain gun, and a second entry with a permanent suppressor (the menu puts the two in blocks)
                 v.choices.push_back({Label(name), t, plain, 1});
                 bool sound_only = SoundOnlyCode(code);  // marked with a star, the menu explains it under the block
-                v.choices.push_back({Label(name) + " + Suppressor" + (sound_only ? " *" : ""), t | 0x100, supp, 1, sound_only});
+                v.choices.push_back({Label(name) + (sound_only ? " *" : ""), t | 0x100, supp, 1, sound_only});
             }
         }
         // the supported group first; within the other one the plain guns, then those with the suppressor
