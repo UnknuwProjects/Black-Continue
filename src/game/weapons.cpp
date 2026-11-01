@@ -69,7 +69,7 @@ constexpr uint32_t kInvBusy = 0xB4;       // 0x13 while the suppressor animation
 constexpr uint32_t kInvSlotCount = 0x42;  // byte
 constexpr uint32_t kInvSlotHeld = 0x43;   // byte
 constexpr bool kProbe = false;  // true: the old per word probe writes weapons_diag.log
-constexpr bool kTrack = true;   // true: what each pickup (suppressor, medkit...) changes in memory is logged
+constexpr bool kTrack = false;  // true: what each pickup (suppressor, medkit...) changes in memory is logged
 constexpr uint32_t kPickupManager = 0x2D0D64;  // the pickup manager (or a pointer to it)
 constexpr uint32_t kPickupTable = 0x5844;      // its pickups, 0x160 bytes each: +0x140 kind, +0x148 type, +0x154 collected
 constexpr uint32_t kPickupSize = 0x160;
@@ -501,6 +501,26 @@ void FillWeapon(const Level& l, uint32_t weapon, bool top_up) {
         if (uint32_t mag = R32(weapon + kWeaponMagazine + m * 4)) FillType(l, R32(mag + kMagazineData), top_up);
 }
 
+// "this type's suppressor is owned": one byte per weapon type (5 AK1, 14 GK1...), set by the pickup and by the level's
+// loadout; the game's Y button works for a weapon only once its byte is 1. Found by diffing the memory at a pickup.
+// Only touched when it still looks like such an array (bytes 0 or 1), so a moved array never gets a stray write.
+constexpr uint32_t kSuppOwned = 0x82073360;
+constexpr uint32_t kSuppOwnedCount = 20;
+
+void GrantSuppressor(int type) {
+    if (type < 0 || uint32_t(type) >= kSuppOwnedCount) return;
+    for (uint32_t i = 0; i < kSuppOwnedCount; i++)
+        if (G<uint8_t>(kSuppOwned + i) > 1) {
+            DiagLog("weapons: owned-suppressor array not at %08X (byte %u = %02X), left alone", unsigned(kSuppOwned), unsigned(i),
+                    unsigned(G<uint8_t>(kSuppOwned + i)));
+            return;
+        }
+    uint8_t& owned = G<uint8_t>(kSuppOwned + uint32_t(type));
+    if (owned == 1) return;
+    owned = 1;
+    DiagLog("weapons: suppressor owned for type %d", type);
+}
+
 void DoFillMedkits() {
     Level l;
     if (!ReadLevel(l)) return SetStatus("Only during a level");
@@ -525,6 +545,7 @@ void DoGive(X86Context& ctx, int code) {
     uint32_t slots = R32(l.inventory + kInvSlots);
     uint32_t old = R32(slots + uint32_t(other) * 4);
     if (old && old == R32(l.inventory + kInvHeld)) return SetStatus("Wait for the weapon switch to end");
+    if (suppressed) GrantSuppressor(type);  // so the game's own Y button can take it off and put it back
     // the game never keeps two of one gun: the one in hand only changes its suppressor (the sound follows at the next
     // weapon switch), and one in the other slot with the same suppressor state is left alone
     std::string shown = Label(name) + (suppressed ? " + Suppressor" : "");
@@ -822,7 +843,7 @@ void WeaponDump(const Level& l) {
 // two seconds (the words that changed since the last copy are marked as noisy). The pickup message starts the diff against
 // the last copy, which is older than the pickup's own writes: a second later the small words (and new heap pointers) that
 // differ and were quiet before are kept, and another second later only those still holding the new value are logged.
-constexpr bool kHeapDiff = true;
+constexpr bool kHeapDiff = false;
 constexpr uint32_t kHeapLo = 0x81000000, kHeapHi = 0x84000000;
 // the game's own globals (.data/.bss of the image) are copied too: the heap alone showed only HUD and effect words
 constexpr uint32_t kLowLo = 0x280000, kLowHi = 0x400000;
@@ -1042,6 +1063,7 @@ void AutoSuppressor(const Level& l) {
     std::string code = CodeOf(Decode(EntryKey(l, type)));
     if (!g_supp_codes.count(code) || R32(w + kWeaponSuppressed)) return;
     W32(w + kWeaponSuppressed, 1);
+    GrantSuppressor(type);
     DiagLog("weapons: suppressor on for %s (weapon %08X)", code.c_str(), unsigned(w));
 }
 
@@ -1174,6 +1196,7 @@ X86_FUNC(sub_001CEE10) {
     if (want) {
         W32(ctx.eax + kWeaponSuppressed, 1);
         g_applied[ctx.eax] = type;
+        GrantSuppressor(type);
     }
 }
 
