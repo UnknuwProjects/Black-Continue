@@ -9,6 +9,7 @@ struct Choice {
     std::string label;  // display name and the game's code, "AK-47 (AK1)"
     int type;           // index in the level's weapon table
     bool held;          // in one of the player's two slots now
+    int group = 0;      // 0 the game has this suppressor (Y takes it off and puts it back), 1 the others
 };
 
 struct View {
