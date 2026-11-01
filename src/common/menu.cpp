@@ -879,9 +879,29 @@ void DrawWeapons() {
     constexpr int kColumns = 3;
     float gap = ImGui::GetStyle().ItemSpacing.x;
     float w = (ImGui::GetContentRegionAvail().x - gap * (kColumns - 1)) / kColumns;
+    // two groups (weapons.cpp sorts them): the game's own suppressors, then the rest; each starts a new row of columns
+    struct GroupTitle {
+        const char* name;  // brighter
+        const char* hint;  // dim, beside it
+    };
+    static const GroupTitle kGroupTitles[] = {{"SUPPORTED", "SUPPRESSOR ON - PRESS Y TO TAKE IT OFF"},
+                                              {"UNSUPPORTED (EXPERIMENTAL)", "SUPPRESSOR CANNOT BE TAKEN OFF"}};
+    int group = -1, column = 0;
     for (size_t i = 0; i < v.choices.size(); i++) {
         const weapons::Choice& c = v.choices[i];
-        if (i % kColumns) ImGui::SameLine();
+        if (c.group != group) {
+            group = c.group;
+            column = 0;
+            const GroupTitle& title = kGroupTitles[std::clamp(group, 0, 1)];
+            ImGui::Dummy(ImVec2(0, ImGui::GetFontSize() * 0.4f));
+            ImGui::TextUnformatted(Ui(title.name).c_str());  // the panel's own text colour
+            ImGui::SameLine();
+            ImGui::PushStyleColor(ImGuiCol_Text, kDim);
+            ImGui::TextUnformatted(Ui(title.hint).c_str());
+            ImGui::PopStyleColor();
+            ImGui::Dummy(ImVec2(0, ImGui::GetFontSize() * 0.1f));
+        }
+        if (column++ % kColumns) ImGui::SameLine();
         ImGui::PushID(c.type);
         if (c.held) ImGui::PushStyleColor(ImGuiCol_Text, kHeading);  // in one of the two slots now
         if (ImGui::Button(c.label.c_str(), ImVec2(w, 0))) weapons::Give(c.type);
