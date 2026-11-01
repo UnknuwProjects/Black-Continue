@@ -69,6 +69,7 @@ constexpr uint32_t kInvBusy = 0xB4;       // 0x13 while the suppressor animation
 constexpr uint32_t kInvSlotCount = 0x42;  // byte
 constexpr uint32_t kInvSlotHeld = 0x43;   // byte
 constexpr bool kProbe = false;  // true: the old per word probe writes weapons_diag.log
+constexpr bool kTestAllSuppressors = true;  // TEST BUILD: the panel offers "+ Suppressor" for every weapon; set false after the tests
 constexpr bool kTrack = false;  // true: what each pickup (suppressor, medkit...) changes in memory is logged
 constexpr uint32_t kPickupManager = 0x2D0D64;  // the pickup manager (or a pointer to it)
 constexpr uint32_t kPickupTable = 0x5844;      // its pickups, 0x160 bytes each: +0x140 kind, +0x148 type, +0x154 collected
@@ -179,7 +180,7 @@ void LoadSuppressorCodes() {
     static bool done;
     if (done) return;
     done = true;
-    g_supp_codes = {"GK1", "AK1", "PST", "MP1", "SNR", "SMG", "ASR", "SM3", "P90", "M16", "BNS"};  // checked in game; BNS (M16A2 + M203) still to check
+    g_supp_codes = {"GK1", "AK1", "PST", "MP1", "SMG", "ASR", "SM3", "P90", "M16", "BNS"};  // checked in game; SNR (Walther 2000) has no suppressor to put on or take off
     std::ifstream f("/storage/emulated/0/Black/SaveData/suppressor_codes.txt");
     std::set<std::string> codes;
     std::string tok;
@@ -475,7 +476,7 @@ void Refresh() {
             for (int i = 0; i < slots; i++)
                 if (uint32_t w = Slot(l, i))
                     if (G<uint8_t>(w + kWeaponType) == t) (R32(w + kWeaponSuppressed) ? supp : plain) = true;
-            bool can = SuppSupportedCode(CodeOf(name));
+            bool can = kTestAllSuppressors || SuppSupportedCode(CodeOf(name));  // TEST BUILD: every type gets "+ Suppressor"
             v.choices.push_back({Label(name), t, can ? plain : plain || supp});
             if (can) v.choices.push_back({Label(name) + " + Suppressor", t | 0x100, supp});  // 0x100: with the suppressor
         }
@@ -545,7 +546,10 @@ void DoGive(X86Context& ctx, int code) {
     uint32_t slots = R32(l.inventory + kInvSlots);
     uint32_t old = R32(slots + uint32_t(other) * 4);
     if (old && old == R32(l.inventory + kInvHeld)) return SetStatus("Wait for the weapon switch to end");
-    if (suppressed) GrantSuppressor(type);  // so the game's own Y button can take it off and put it back
+    // TEST BUILD: one line before anything risky; if the game crashes, the last "GIVE" line in weapons_diag.log is the cause
+    DiagLog("GIVE start: type %d %s (%s) suppressed=%d", type, Decode(EntryKey(l, type)).c_str(), Label(name).c_str(), suppressed ? 1 : 0);
+    // only the types the game really has a suppressor for get the Y permission; the others stay permanent (do not press Y on them)
+    if (suppressed && SuppSupportedCode(CodeOf(name))) GrantSuppressor(type);
     // the game never keeps two of one gun: the one in hand only changes its suppressor (the sound follows at the next
     // weapon switch), and one in the other slot with the same suppressor state is left alone
     std::string shown = Label(name) + (suppressed ? " + Suppressor" : "");
@@ -563,8 +567,10 @@ void DoGive(X86Context& ctx, int code) {
     // the gun made first: a full pool keeps the old one
     uint32_t edi = ctx.edi;
     ctx.edi = l.manager;
+    DiagLog("GIVE create: type %d", type);
     uint32_t weapon = CallGuest(ctx, kCreateWeapon, {l.player, uint32_t(type), 0});
     ctx.edi = edi;
+    DiagLog("GIVE created: weapon %08X", unsigned(weapon));
     if (!weapon) return SetStatus("The game has no room for another weapon");
     if (old) {
         uint32_t edx = ctx.edx;
@@ -579,6 +585,7 @@ void DoGive(X86Context& ctx, int code) {
     g_applied[weapon] = type;
     FillWeapon(l, weapon, false);
     W32(l.inventory + kInvRequest, 2);  // out it comes, as the d-pad brings it
+    DiagLog("GIVE switching: type %d, flag set, next the world model", type);
     bool model = EnsureWorldModel(ctx, name, G<uint8_t>(l.world + kWorldSilver) != 0);
     SetStatus(Label(name) + (suppressed ? " + Suppressor" : "") + (model ? " given" : " given (dropped, it will vanish)"));
     Refresh();
