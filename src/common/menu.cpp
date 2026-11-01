@@ -251,7 +251,7 @@ enum RowId { kRenderResolution, kMaxFps, kVsync, kFpsCounter, kAniso, kReloadBlu
              kCheckUpdates, kTouchSensitivity, kLeftDeadzone, kRightDeadzone, kLeftSensitivity, kRightSensitivity,
              kScreenFilter, kGyroInvertX, kGyroInvertY, kUnlockLevels, kUnlockBlackOps, kTouchSkin, kCredit, kBloom,
              kFog, kAntiAliasing, kHdr, kEsp, kAimbot, kTouchStick, kDynamicRes, kDynamicTarget, kDynamicMin,
-             kDynamicMax, kDynamicHold, kAutoUpdate };
+             kDynamicMax, kDynamicHold, kAutoUpdate, kInfiniteMedkits };
 
 using rows::Kind;
 using rows::Row;
@@ -327,6 +327,7 @@ constexpr Row kCheatRows[] = {
     {Kind::Value, kNoRecoil, "NO RECOIL"},
     {Kind::Heading, -1, "PLAYER"},
     {Kind::Value, kGodMode, "GOD MODE"},
+    {Kind::Value, kInfiniteMedkits, "INFINITE MEDKITS"},
     {Kind::Value, kOneHitKill, "ONE-HIT KILL"},
     {Kind::Value, kEsp, "ESP LINES"},
     {Kind::Value, kAimbot, "AIMBOT (WHILE AIMING IN)"},  // esp.cpp turns the view only at a zoom above 1
@@ -407,6 +408,7 @@ bool* ToggleFlag(Settings& s, int id) {
         case kInfiniteAmmo: return &o.infinite_ammo;
         case kNoRecoil: return &o.no_recoil;
         case kGodMode: return &o.god_mode;
+        case kInfiniteMedkits: return &o.infinite_medkits;
         case kOneHitKill: return &o.one_hit_kill;
         case kInfiniteGrenades: return &o.infinite_grenades;
         case kUnlockLevels: return &o.unlock_levels;
@@ -713,6 +715,7 @@ void RestoreDefaults(int page) {
         o.no_recoil = none.no_recoil;
         o.game_speed = none.game_speed;
         o.god_mode = none.god_mode;
+        o.infinite_medkits = none.infinite_medkits;
         o.one_hit_kill = none.one_hit_kill;
         o.infinite_grenades = none.infinite_grenades;
         o.unlock_levels = none.unlock_levels;
@@ -744,6 +747,7 @@ void RestoreDefaults(int page) {
     o.no_recoil = keep.no_recoil;
     o.game_speed = keep.game_speed;
     o.god_mode = keep.god_mode;
+    o.infinite_medkits = keep.infinite_medkits;
     o.one_hit_kill = keep.one_hit_kill;
     o.infinite_grenades = keep.infinite_grenades;
     o.unlock_levels = keep.unlock_levels;
