@@ -350,6 +350,7 @@ constexpr Credit kCredits[] = {
     {"DATFOOLDIVE", "ANY WEAPON IN ANY LEVEL", "https://github.com/datfooldive"},
     {"BAGASROMADON", "BUTTON SKIN", "https://github.com/bagasromadon"},
     {"Zukiru", "HDR SHADER", nullptr},
+    {"UNKNUW", "SUPPRESSOR + MEDKITS", "https://github.com/UnknuwProjects"},
     {"BUILT WITH", nullptr, nullptr},
     {"XBOXXBE-RECOMP", "TGP482", nullptr},
     {"SDL3, GLSLANG, TOML++", "LIBRARIES", nullptr},
