@@ -1,0 +1,102 @@
+# Recompiles default.xbe only (no Gradle) and greps the generated code. Manual run: Actions > Recompile grep > Run workflow.
+# Put this file at .github/workflows/recompile-grep.yml
+name: Recompile grep
+
+on:
+  workflow_dispatch:
+    inputs:
+      address:
+        description: "Return address to look up (hex, no 0x)"
+        default: "12B421"
+
+jobs:
+  grep:
+    runs-on: windows-2025
+    timeout-minutes: 90
+    env:
+      NDK_VERSION: 28.2.13676358
+      CMAKE_VERSION: 3.31.6
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Android SDK packages
+        shell: cmd
+        run: call "%ANDROID_HOME%\cmdline-tools\latest\bin\sdkmanager.bat" --install "platforms;android-34" "ndk;%NDK_VERSION%" "cmake;%CMAKE_VERSION%" >nul
+
+      - name: Decrypt default.xbe
+        shell: bash
+        env:
+          XBE_KEY: ${{ secrets.XBE_KEY }}
+        run: |
+          if [ -z "$XBE_KEY" ]; then echo "::error::The XBE_KEY secret is missing"; exit 1; fi
+          mkdir -p assets
+          key="$RUNNER_TEMP/xbe.key"
+          printf '%s' "$XBE_KEY" > "$key"
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in ci/default.xbe.enc -out assets/default.xbe -pass "file:$key"
+          rm -f "$key"
+          sha1sum assets/default.xbe
+
+      - name: Recompile
+        shell: cmd
+        run: |
+          set "PF86=%ProgramFiles(x86)%"
+          set "VSWHERE=%PF86%\Microsoft Visual Studio\Installer\vswhere.exe"
+          set "TOOLS=%CD%\out\build\android-tools"
+          set "NDK=%ANDROID_HOME%\ndk\%NDK_VERSION%"
+          set "SDKCMAKE=%ANDROID_HOME%\cmake\%CMAKE_VERSION%\bin"
+          for /f "usebackq tokens=*" %%i in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSDIR=%%i"
+          if not defined VSDIR (echo Visual Studio not found & exit /b 1)
+          call "%VSDIR%\Common7\Tools\VsDevCmd.bat" -arch=amd64 -host_arch=amd64 >nul
+          set "PATH=%SDKCMAKE%;%PATH%"
+          set "CLANGCL=%VSDIR%\VC\Tools\Llvm\x64\bin\clang-cl.exe"
+          if not exist "%CLANGCL%" set "CLANGCL=%NDK%\toolchains\llvm\prebuilt\windows-x86_64\bin\clang-cl.exe"
+          cmake -S tools -B "%TOOLS%" -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_C_COMPILER=%CLANGCL%" "-DCMAKE_CXX_COMPILER=%CLANGCL%" >nul || exit /b 1
+          cmake --build "%TOOLS%" >nul || exit /b 1
+          set /p SDK=<"%TOOLS%\sdk_dir.txt"
+          set "SDK=%SDK:/=\%"
+          findstr /b /l /c:"[symbols]" config\game.toml >nul 2>nul && goto recompile
+          "%TOOLS%\xbe_symbols.exe" assets\default.xbe "%SDK%\xdk" --out config\game.toml || exit /b 1
+          :recompile
+          "%TOOLS%\xbe_recomp.exe" config\game.toml --xdk "%SDK%\xdk" >nul || exit /b 1
+
+      - name: Grep generated code
+        shell: bash
+        env:
+          ADDR: ${{ inputs.address }}
+        run: |
+          out=result.txt
+          g=generated/game
+          ls "$g" | head -20
+          {
+            echo "=== 1. raw hits of the address ($ADDR) ==="
+            grep -rniE "0*$ADDR" "$g" --include=*.cpp --include=*.h | head -40
+            echo
+            echo "=== 2. all sub_${ADDR:0:3}xxx names ==="
+            grep -rhoE "sub_0*${ADDR:0:3}[0-9A-Fa-f]{3}" "$g" | sort -u | tr '\n' ' '
+            echo
+          } > $out
+
+          # the function that holds the address: the largest start <= address
+          target=$((16#$ADDR))
+          best=$(grep -rhoE "sub_0*${ADDR:0:3}[0-9A-Fa-f]{3}" "$g" | sort -u | sed 's/sub_//' \
+            | while read -r h; do v=$((16#$h)); [ $v -le $target ] && echo "$v $h"; done | sort -n | tail -1 | cut -d' ' -f2)
+          echo "=== 3. candidate function: sub_$best ===" >> $out
+          grep -rnE "^[A-Za-z_].*sub_$best\(" "$g" --include=*.cpp --include=*.h >> $out
+          echo >> $out
+          echo "=== 4. its body (definition + 150 lines) ===" >> $out
+          grep -rnE -A150 "^(X86_FUNC|void|static|extern).*sub_$best\(" "$g" --include=*.cpp | head -300 >> $out
+          echo >> $out
+          echo "=== 5. who calls sub_$best ===" >> $out
+          grep -rnE "sub_$best\b" "$g" --include=*.cpp | grep -vE "^[^:]*:[0-9]+:(X86_FUNC|void)" | head -30 >> $out
+          echo >> $out
+          echo "=== 6. who calls sub_001F3A80 right before (same file, 30 lines) ===" >> $out
+          grep -rn -B30 "sub_001F3A80" "$g" --include=*.cpp | grep -n "C9ABBCB2" | head -5 >> $out
+
+          wc -l $out
+          head -c 60000 $out
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: result
+          path: result.txt
