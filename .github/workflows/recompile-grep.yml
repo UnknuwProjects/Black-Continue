@@ -65,6 +65,7 @@ jobs:
         env:
           ADDR: ${{ inputs.address }}
         run: |
+          set +e +o pipefail
           out=result.txt
           g=generated/game
           ls "$g" | head -20
