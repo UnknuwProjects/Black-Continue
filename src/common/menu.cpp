@@ -221,8 +221,12 @@ int OptionRow(const char* label, const char* value, bool confirm = false) {
     ImGui::Selectable("##row", false, ImGuiSelectableFlags_AllowOverlap, ImVec2(box.row_w, box.row_h));
     if (ImGui::IsItemFocused()) {
         FillItem();
-        if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft)) step = -1;
-        if (ImGui::IsKeyPressed(ImGuiKey_RightArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight)) step = 1;
+        bool left = ImGui::IsKeyPressed(ImGuiKey_LeftArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft);
+        bool right = ImGui::IsKeyPressed(ImGuiKey_RightArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight);
+        if (left || right) {
+            step = left ? -1 : 1;
+            ImGui::NavMoveRequestCancel();  // the step is this key's; ImGui must not also move the focus with it
+        }
         if (confirm && ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown, false)) step = 1;  // A, on a row with no arrows' worth
     }
     RowLabel(box, label);
@@ -980,19 +984,28 @@ void Defaults() {
     RestoreDefaults(g_page);
 }
 
-// the panel's two pages, the cheats and the touch controls, as tabs; the pad's L1 and R1 switch them
+// the panel's pages as tabs: the cheats, the touch controls, and the mouse and keyboard while one is in use; the pad's
+// L1 and R1 switch them
 void DrawTabs() {
-    if (g_page_flip.exchange(false)) g_page = g_page == kCheatsPage ? kTouchPage : kCheatsPage;
-    if (g_page != kCheatsPage && g_page != kTouchPage) g_page = kCheatsPage;
+    // MOUSE AND KEYBOARD is a third page while a mouse or keyboard is the input in use; a pad or the touch screen hides it
+    const bool keys = input::KeyboardActive();
+    if (g_page_flip.exchange(false)) {
+        if (g_page == kCheatsPage) g_page = kTouchPage;
+        else if (g_page == kTouchPage && keys) g_page = kKeyboardPage;
+        else g_page = kCheatsPage;
+    }
+    if (g_page != kCheatsPage && g_page != kTouchPage && g_page != kKeyboardPage) g_page = kCheatsPage;
+    if (g_page == kKeyboardPage && !keys) g_page = kCheatsPage;
     struct Tab {
         int page;
         const char* label;
     };
-    static const Tab kTabs[] = {{kCheatsPage, "CHEATS"}, {kTouchPage, "CONTROLS"}};
+    static const Tab kTabs[] = {{kCheatsPage, "CHEATS"}, {kTouchPage, "CONTROLS"}, {kKeyboardPage, "MOUSE AND KEYBOARD"}};
+    const size_t count = keys ? std::size(kTabs) : std::size(kTabs) - 1;
     float gap = ImGui::GetStyle().ItemSpacing.x;
-    float w = (ImGui::GetContentRegionAvail().x - gap) / 2;
+    float w = (ImGui::GetContentRegionAvail().x - gap * float(count - 1)) / float(count);
     ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);  // the d-pad stays on the rows
-    for (size_t i = 0; i < std::size(kTabs); i++) {
+    for (size_t i = 0; i < count; i++) {
         if (i) ImGui::SameLine();
         bool on = g_page == kTabs[i].page;
         ImGui::PushStyleColor(ImGuiCol_Text, on ? kHeading : kDim);
@@ -1016,8 +1029,8 @@ void DrawFooter(float em) {
     ImGui::TextUnformatted(Ui(hint, false).c_str());
     ImGui::PopStyleColor();
     float bw = em * 8;
-    // Defaults restores the cheats; the touch page has no undo of its own
-    bool defaults = g_page == kCheatsPage;
+    // Defaults restores the cheats or the keys; the touch page has no undo of its own
+    bool defaults = g_page == kCheatsPage || g_page == kKeyboardPage;
     float buttons_pad = ImGui::GetContentRegionAvail().x - bw * (defaults ? 2 : 1) - (defaults ? ImGui::GetStyle().ItemSpacing.x : 0);
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(buttons_pad, 0.0f));
     if (ImGui::Button(Ui("Back", false).c_str(), ImVec2(bw, 0))) ToggleMenu();
