@@ -13,6 +13,7 @@
 #include <SDL3/SDL.h>
 
 #include "app/app.h"
+#include "common/menu.h"
 #include "common/options.h"
 #include "core/log.h"
 #include "host.h"
