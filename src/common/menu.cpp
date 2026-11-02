@@ -602,13 +602,14 @@ void StepInputRow(int id, int step, char (&text)[64]) {
             if (step) o.walk_speed = uint32_t(StepRange(int(o.walk_speed), 10, 100, 5, step));
             std::snprintf(text, sizeof(text), "%u%%", o.walk_speed);
             break;
-        case kGyro:
-            // off, always on, while firing
-            if (step) gyro::SetMode(uint32_t(StepIndex(int(gyro::CurrentMode()), step, 3)));
-            std::snprintf(text, sizeof(text), "%s", gyro::CurrentMode() == 0 ? "OFF"
-                                                    : gyro::CurrentMode() == 1 ? "ALWAYS"
-                                                                               : "WHILE FIRING");
+        case kGyro: {
+            // off, always on, while firing, while aiming: as gyro::Mode
+            static const char* const kGyroNames[] = {"OFF", "ALWAYS", "WHILE FIRING", "WHILE AIMING"};
+            constexpr int kGyroCount = int(std::size(kGyroNames));
+            if (step) gyro::SetMode(uint32_t(StepIndex(int(gyro::CurrentMode()), step, kGyroCount)));
+            std::snprintf(text, sizeof(text), "%s", kGyroNames[std::min(int(gyro::CurrentMode()), kGyroCount - 1)]);
             break;
+        }
         case kTouchLayout:
             // the presets, CUSTOM once a control was moved
             if (step) touch::StepLayout(step);
