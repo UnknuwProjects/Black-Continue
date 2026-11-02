@@ -212,13 +212,6 @@ void FillItem() {
                                               ImGui::GetColorU32(ImGuiCol_Header));
 }
 
-std::atomic<int> g_pad_step{0};         // the pad's d-pad left (-1) or right (1), read from SDL by touch::PadPanel
-std::atomic<int64_t> g_pad_step_ms{0};  // when, so one nobody took does not step a row later
-int64_t SteadyMs() {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
-        .count();
-}
-
 // label left, arrows and value right, the row is the only nav stop
 int OptionRow(const char* label, const char* value, bool confirm = false) {
     const ImGuiStyle& style = ImGui::GetStyle();
@@ -228,19 +221,12 @@ int OptionRow(const char* label, const char* value, bool confirm = false) {
     ImGui::Selectable("##row", false, ImGuiSelectableFlags_AllowOverlap, ImVec2(box.row_w, box.row_h));
     if (ImGui::IsItemFocused()) {
         FillItem();
-        // the d-pad's left and right come from SDL (touch::PadPanel), the same way L1 and R1 do; ImGui's own keys for
-        // them are the fallback
-        int dir = g_pad_step.exchange(0);
-        if (dir && SteadyMs() - g_pad_step_ms.load() > 250) dir = 0;
-        if (!dir) {
-            bool left = ImGui::IsKeyPressed(ImGuiKey_LeftArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft);
-            bool right = ImGui::IsKeyPressed(ImGuiKey_RightArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight);
-            if (left || right) dir = left ? -1 : 1;
+        bool left = ImGui::IsKeyPressed(ImGuiKey_LeftArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft);
+        bool right = ImGui::IsKeyPressed(ImGuiKey_RightArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight);
+        if (left || right) {
+            step = left ? -1 : 1;
+            ImGui::NavMoveRequestCancel();  // the step is this key's; ImGui must not also move the focus with it
         }
-        if (dir) step = dir;
-        // a row has nothing to its left or right: ImGui's own move there only loses the focus
-        ImGuiContext& g = *ImGui::GetCurrentContext();
-        if (dir || g.NavMoveDir == ImGuiDir_Left || g.NavMoveDir == ImGuiDir_Right) ImGui::NavMoveRequestCancel();
         if (confirm && ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown, false)) step = 1;  // A, on a row with no arrows' worth
     }
     RowLabel(box, label);
@@ -1242,11 +1228,6 @@ bool MenuOpen() { return g_open.load(std::memory_order_relaxed); }
 bool Capturing() { return g_capture >= 0; }
 
 void SwitchPanelPage() { g_page_flip.store(true); }
-
-void PanelStep(int dir) {
-    g_pad_step_ms.store(SteadyMs());
-    g_pad_step.store(dir);
-}
 
 void ToggleMenu() {
     bool open = !MenuOpen();
