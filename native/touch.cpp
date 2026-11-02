@@ -36,6 +36,11 @@
 #include "core/log.h"
 #include "host.h"
 
+// native/menu.cpp: the settings panel's other page
+namespace app {
+void SwitchPanelPage();
+}
+
 namespace input {
 
 namespace {
@@ -320,6 +325,42 @@ int VkOfButton(uint8_t b) {
     }
 }
 
+// AIM MODE: TAP + HOLD. A tap on aim keeps it on until the next tap, aim held past kAimHoldMs lets go when released.
+// The game must take aim as held (HOLD TO AIM), the button then is all it sees. One state for the touch and pad's
+// side, one for the keys and mouse's, each reading the aim bit (the right thumb) as it came
+std::atomic<bool> g_aim_hybrid{false};
+constexpr uint64_t kAimHoldMs = 250;
+constexpr uint16_t kAimBit = 1u << 7;
+struct AimState {
+    bool raw = false;      // the button as it was read last
+    bool latched = false;  // on after a tap
+    bool swallow = false;  // this press only took the latch off
+    uint64_t down_ms = 0;
+};
+AimState g_pad_aim, g_key_aim;
+
+void LatchAim(Pad& p, AimState& s) {
+    bool raw = (p.buttons & kAimBit) != 0;
+    // off in the menus and the panel too: a latch never outlives the play it was made in
+    if (!g_aim_hybrid || !game::Opt().hold_aim || app::MenuOpen() || !Play()) {
+        s = AimState{};
+        s.raw = raw;
+        return;
+    }
+    uint64_t now = NowMs();
+    if (raw && !s.raw) {
+        s.down_ms = now;
+        s.swallow = s.latched;
+        s.latched = false;
+    } else if (!raw && s.raw) {
+        if (!s.swallow && now - s.down_ms < kAimHoldMs) s.latched = true;
+        s.swallow = false;
+    }
+    s.raw = raw;
+    bool aim = s.latched || (raw && !s.swallow);
+    p.buttons = uint16_t(aim ? (p.buttons | kAimBit) : (p.buttons & ~kAimBit));
+}
+
 }  // namespace
 
 void ReleaseCursor() { g_settle = true; }
@@ -337,7 +378,7 @@ bool TakeMouse(float& dx, float& dy) {
     return true;
 }
 
-void Keyboard(Pad& p) {
+static void KeyboardRead(Pad& p) {
     if (!Active()) {
         g_settle = true;
         return;
@@ -364,6 +405,12 @@ void Keyboard(Pad& p) {
     if (int x = stick[7] - stick[6]) p.rx = int16_t(x * kStickMax);
     if (int y = stick[4] - stick[5]) p.ry = int16_t(y * kStickMax);
     if (fixed_down || held.used) g_keyboard = true;
+}
+
+void Keyboard(Pad& p) {
+    KeyboardRead(p);
+    LatchAim(p, g_key_aim);
+    if (g_key_aim.latched) p.connected = true;
 }
 
 void SeenPad(const Pad& p) {
@@ -707,6 +754,7 @@ void LoadLayout() {
         std::string fire_look = t["fire_look"].value_or(std::string(kFireLookIds[g_fire_look]));
         for (uint32_t i = 0; i < kFireLooks; i++)
             if (fire_look == kFireLookIds[i]) g_fire_look = i;
+        g_aim_hybrid = t["aim_mode"].value_or(std::string("normal")) == "tap_hold";
         for (size_t i = 0; i <= kButtonCount; i++) {
             // the menus' controls are not in the editor: always the preset's
             if (i != kStick && kButtons[i].when == When::Menus) continue;
@@ -732,7 +780,8 @@ void SaveLayout() {
     }
     toml::table t{{"preset", kPresets[g_preset].id}, {"opacity", double(g_opacity)}, {"scale", double(g_scale)},
                   {"skin", kSkinIds[g_skin]}, {"stick", g_fixed_stick ? "fixed" : "floating"},
-                  {"fire_look", kFireLookIds[g_fire_look]}, {"controls", controls}};
+                  {"fire_look", kFireLookIds[g_fire_look]},
+                  {"aim_mode", g_aim_hybrid ? "tap_hold" : "normal"}, {"controls", controls}};
     std::ofstream(LayoutFile()) << t << "\n";
 }
 
@@ -1102,8 +1151,8 @@ void KeyEvent(const SDL_KeyboardEvent& k) {
 // a pad's two sticks pressed together open the settings panel as F10 does on a keyboard, and B closes it again. Polled
 // each turn of the event loop, so it needs no event of its own
 void PadPanel() {
-    static bool combo_held = false, back_held = false;
-    bool combo = false, back = false;
+    static bool combo_held = false, back_held = false, tab_held = false;
+    bool combo = false, back = false, tab = false;
     int n = 0;
     if (SDL_JoystickID* ids = SDL_GetGamepads(&n)) {
         for (int i = 0; i < n; i++) {
@@ -1113,15 +1162,20 @@ void PadPanel() {
                 SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_RIGHT_STICK))
                 combo = true;
             if (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_EAST)) back = true;
+            if (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER) ||
+                SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER))
+                tab = true;
         }
         SDL_free(ids);
     }
     if (host::Foreground()) {
         if (combo && !combo_held) app::ToggleMenu();
         else if (back && !back_held && app::MenuOpen() && !app::Capturing()) app::ToggleMenu();
+        if (tab && !tab_held && app::MenuOpen() && !app::Capturing()) app::SwitchPanelPage();
     }
     combo_held = combo;
     back_held = back;
+    tab_held = tab;
 }
 
 }  // namespace
@@ -1196,6 +1250,7 @@ bool OnEvent(const SDL_Event& e) {
 void Apply(int port, input::Pad& pad) {
     if (port != 0 || g_editing) return;
     std::lock_guard lock(g_lock);
+    EnsureLayout();  // the aim mode is read from it, with no touch yet
     Recount();  // a held dpad arrow's steps go by the clock
     bool used = false;
     for (size_t i = 0; i < kButtonCount; i++) {
@@ -1216,6 +1271,8 @@ void Apply(int port, input::Pad& pad) {
         pad.lx = int16_t(std::clamp(g_stick_x, -1.0f, 1.0f) * 32767.0f);
         pad.ly = int16_t(std::clamp(g_stick_y, -1.0f, 1.0f) * 32767.0f);
     }
+    LatchAim(pad, g_pad_aim);
+    if (g_pad_aim.latched) used = true;
     if (used) pad.connected = true;
 }
 
@@ -1668,6 +1725,21 @@ const char* FireLookName() {
     std::lock_guard lock(g_lock);
     EnsureLayout();
     return kFireLookNames[g_fire_look];
+}
+
+const char* AimModeName() {
+    std::lock_guard lock(g_lock);
+    EnsureLayout();
+    return g_aim_hybrid ? "TAP + HOLD" : "NORMAL";
+}
+
+// TAP + HOLD needs the game to take aim as held, so it turns HOLD TO AIM on
+void StepAimMode(int) {
+    std::lock_guard lock(g_lock);
+    EnsureLayout();
+    g_aim_hybrid = !g_aim_hybrid;
+    if (g_aim_hybrid) game::Opt().hold_aim = true;
+    SaveLayout();
 }
 
 void StepFireLook(int step) {
