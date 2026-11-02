@@ -213,6 +213,7 @@ void FillItem() {
 }
 
 std::atomic<int> g_pad_step{0};         // the pad's d-pad left (-1) or right (1), read from SDL by touch::PadPanel
+ImGuiID g_last_row_id = 0;              // the row that had the focus last
 std::atomic<int64_t> g_pad_step_ms{0};  // when, so one nobody took does not step a row later
 int64_t SteadyMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
@@ -226,7 +227,18 @@ int OptionRow(const char* label, const char* value, bool confirm = false) {
     ImGui::PushID(label);
     int step = 0;
     ImGui::Selectable("##row", false, ImGuiSelectableFlags_AllowOverlap, ImVec2(box.row_w, box.row_h));
-    if (ImGui::IsItemFocused()) {
+    ImGuiContext& g = *ImGui::GetCurrentContext();
+    const ImGuiID row_id = ImGui::GetItemID();
+    bool focused = ImGui::IsItemFocused();
+    // the d-pad's left clears ImGui's focus before this code sees it (the row goes dark, the next press lands on the
+    // top row): the row that had the focus takes it back when a step is waiting for it
+    if (!focused && g.NavId == 0 && g.NavWindow && row_id == g_last_row_id && g_pad_step.load() != 0 &&
+        SteadyMs() - g_pad_step_ms.load() <= 250) {
+        ImGui::SetFocusID(row_id, ImGui::GetCurrentWindow());
+        focused = true;
+    }
+    if (focused) {
+        g_last_row_id = row_id;
         FillItem();
         // the d-pad's left and right come from SDL (touch::PadPanel), the same way L1 and R1 do; ImGui's own keys for
         // them are the fallback
@@ -239,7 +251,6 @@ int OptionRow(const char* label, const char* value, bool confirm = false) {
         }
         if (dir) step = dir;
         // a row has nothing to its left or right: ImGui's own move there only loses the focus
-        ImGuiContext& g = *ImGui::GetCurrentContext();
         if (dir || g.NavMoveDir == ImGuiDir_Left || g.NavMoveDir == ImGuiDir_Right) ImGui::NavMoveRequestCancel();
         if (confirm && ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown, false)) step = 1;  // A, on a row with no arrows' worth
     }
