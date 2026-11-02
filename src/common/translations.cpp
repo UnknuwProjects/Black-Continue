@@ -143,6 +143,7 @@ constexpr Entry kEntries[] = {
     {"INDONESIAN", {u"Bahasa Indonesia", u"Bahasa Indonesia", u"Bahasa Indonesia", u"Bahasa Indonesia", u"Bahasa Indonesia"}},
     {"ALWAYS", {{}, {}, {}, {}, u"Selalu"}},
     {"WHILE FIRING", {{}, {}, {}, {}, u"Saat menembak"}},
+    {"WHILE AIMING", {{}, {}, {}, {}, u"Saat membidik"}},
     {"OPEN", {{}, {}, {}, {}, u"Buka"}},
         {"CHECK FOR UPDATES", {u"Rechercher des mises à jour", u"Nach Updates suchen", u"Cerca aggiornamenti", u"Buscar actualizaciones", u"Cek pembaruan"}},
     {"CHECK", {u"Rechercher", u"Suchen", u"Cerca", u"Buscar", u"Cek"}},
