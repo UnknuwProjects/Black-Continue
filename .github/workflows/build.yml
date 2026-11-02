@@ -130,16 +130,18 @@ jobs:
 
       - name: Release notes
         shell: bash
+        env:
+          CHANGES_FILE: ${{ runner.temp }}/changes.md
         run: |
           apk="Black-${{ steps.version.outputs.name }}.apk"
           size=$(awk -v b="$(stat -c %s "$apk")" 'BEGIN { printf "%.1f MB", b / 1048576 }')
           sha=$(sha256sum "$apk" | cut -d' ' -f1)
           # put the changelog in place of {{CHANGES}}, then fill in the other placeholders
-          awk -v f="$RUNNER_TEMP/changes.md" 'index($0, "{{CHANGES}}") { while ((getline l < f) > 0) print l; next } { print }' \
+          awk 'index($0, "{{CHANGES}}") { f = ENVIRON["CHANGES_FILE"]; while ((getline l < f) > 0) print l; close(f); next } { print }' \
               ci/release-notes.md > "$RUNNER_TEMP/notes-stage.md"
           sed -e "s|{{VERSION}}|$GITHUB_REF_NAME|g" -e "s|{{TAG}}|$GITHUB_REF_NAME|g" -e "s|{{APK}}|$apk|g" \
               -e "s|{{SIZE}}|$size|g" -e "s|{{SHA256}}|$sha|g" "$RUNNER_TEMP/notes-stage.md" > "$RUNNER_TEMP/release-notes.md"
-
+              
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
