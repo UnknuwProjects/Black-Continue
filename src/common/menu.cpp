@@ -1010,16 +1010,26 @@ void DragScroll(float em) {
     glide *= std::max(0.0f, 1.0f - kFriction * io.DeltaTime);
 }
 
+// the font's size as a share of the screen's height, and the most of its width the panel's fifty ems may take; the panel
+// is sized for a thumb: the smaller of the two wins, so a tall screen and a narrow one both fit
+constexpr float kUiHeightShare = 0.034f;
+constexpr float kUiWidthShare = 0.0192f;
+
 void DrawPanel() {
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     float em = ImGui::GetFontSize();
     ImGui::SetNextWindowPos(vp->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(em * 50, em * 32), ImGuiCond_Always);
+    // never wider or taller than the screen; what does not fit scrolls
+    ImGui::SetNextWindowSize(ImVec2(std::min(em * 50, vp->Size.x * 0.96f), std::min(em * 32, vp->Size.y * 0.94f)),
+                             ImGuiCond_Always);
     for (const auto& [col, color] : kPanelColors) ImGui::PushStyleColor(col, color);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(em * 1.6f, em * 1.2f));
+    // taller buttons and rows with room between them: a thumb, not a mouse
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(em * 0.7f, em * 0.5f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(em * 0.6f, em * 0.4f));
     constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
                                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar;
     if (ImGui::Begin("##settings", nullptr, kFlags)) {
@@ -1040,7 +1050,7 @@ void DrawPanel() {
         DrawFooter(em);
     }
     ImGui::End();
-    ImGui::PopStyleVar(4);
+    ImGui::PopStyleVar(6);
     ImGui::PopStyleColor(int(std::size(kPanelColors)));
 }
 
@@ -1163,8 +1173,10 @@ void DrawUi(double fps) {
     if (MenuOpen()) io.ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;
     else io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
     io.KeyRepeatRate = 0.1f;  // held arrows step ten times a second, ImGui's twenty is too fast for settings
-    // scale the font with the output height
-    io.FontGlobalScale = std::max(1.0f, io.DisplaySize.y / 720.0f);
+    // scale the font with the output: the font's own pixel size is the size drawn now over the scale it is drawn at
+    float base_px = ImGui::GetFontSize() / std::max(io.FontGlobalScale, 0.01f);
+    float em_px = std::min(io.DisplaySize.y * kUiHeightShare, io.DisplaySize.x * kUiWidthShare);
+    io.FontGlobalScale = std::max(1.0f, em_px / base_px);
     if (MenuOpen()) {
         PollCapture();
         DrawPanel();
