@@ -36,6 +36,10 @@
 #include "core/log.h"
 #include "host.h"
 
+namespace app {
+void PanelStep(int dir);  // menu.cpp: the d-pad's left (-1) or right (1), for the panel's focused row
+}
+
 // native/menu.cpp: the settings panel's other page
 namespace app {
 void SwitchPanelPage();
@@ -1193,7 +1197,10 @@ void KeyEvent(const SDL_KeyboardEvent& k) {
 // each turn of the event loop, so it needs no event of its own
 void PadPanel() {
     static bool combo_held = false, back_held = false, tab_held = false;
+    static int step_held = 0;  // the d-pad's left (-1) or right (1) that is down
+    static uint64_t step_next = 0;
     bool combo = false, back = false, tab = false;
+    int step = 0;
     int n = 0;
     if (SDL_JoystickID* ids = SDL_GetGamepads(&n)) {
         for (int i = 0; i < n; i++) {
@@ -1203,6 +1210,8 @@ void PadPanel() {
                 SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_RIGHT_STICK))
                 combo = true;
             if (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_EAST)) back = true;
+            if (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_DPAD_LEFT)) step = -1;
+            if (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_DPAD_RIGHT)) step = 1;
             if (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER) ||
                 SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER))
                 tab = true;
@@ -1213,10 +1222,22 @@ void PadPanel() {
         if (combo && !combo_held) app::ToggleMenu();
         else if (back && !back_held && app::MenuOpen() && !app::Capturing()) app::ToggleMenu();
         if (tab && !tab_held && app::MenuOpen() && !app::Capturing()) app::SwitchPanelPage();
+        // a step on the press, then repeating while it is held
+        uint64_t now = NowMs();
+        if (step && app::MenuOpen() && !app::Capturing()) {
+            if (step != step_held) {
+                app::PanelStep(step);
+                step_next = now + 400;
+            } else if (now >= step_next) {
+                app::PanelStep(step);
+                step_next = now + 120;
+            }
+        }
     }
     combo_held = combo;
     back_held = back;
     tab_held = tab;
+    step_held = step;
 }
 
 }  // namespace
