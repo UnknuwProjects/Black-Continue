@@ -8,15 +8,9 @@ on:
       address:
         description: "Return address to look up (hex, no 0x)"
         default: "12B421"
-      file:
-        description: "File in generated/game"
-        default: "x86_recomp.32.cpp"
-      start:
-        description: "First line"
-        default: "1130"
-      end:
-        description: "Last line"
-        default: "1330"
+      ranges:
+        description: "file:start:end, space separated"
+        default: "x86_recomp.32.cpp:3195:3290 x86_recomp.32.cpp:12806:12901 x86_recomp.48.cpp:15392:15487"
 
 jobs:
   grep:
@@ -109,19 +103,22 @@ jobs:
       - name: Dump code range
         shell: bash
         env:
-          F: ${{ inputs.file }}
-          S: ${{ inputs.start }}
-          E: ${{ inputs.end }}
+          RANGES: ${{ inputs.ranges }}
         run: |
           set +e +o pipefail
-          f="generated/game/$F"
-          {
-            echo "=== function starts in $F lines $S-$E ==="
-            awk -v s="$S" -v e="$E" 'NR>=s && NR<=e && /^(X86_FUNC|X86_WEAK_FUNC|X86_EXTERN_FUNC|void|static)/ { print NR": "$0 }' "$f"
-            echo
-            echo "=== code $S-$E ==="
-            awk -v s="$S" -v e="$E" 'NR>=s && NR<=e { print NR": "$0 }' "$f"
-          } > range.txt
+          : > range.txt
+          for r in $RANGES; do
+            F=${r%%:*}; rest=${r#*:}; S=${rest%%:*}; E=${rest#*:}
+            f="generated/game/$F"
+            {
+              echo "######## $F $S-$E"
+              echo "--- function start before the range:"
+              awk -v s="$S" 'NR<s && /^X86_FUNC\(__imp__/ { l=NR": "$0 } END { print l }' "$f"
+              echo "--- code (comments only, instructions dropped):"
+              awk -v s="$S" -v e="$E" 'NR>=s && NR<=e && (/^\t\/\/ / || /^loc_/ || /sub_[0-9A-F]+\(ctx/) { print NR": "$0 }' "$f"
+              echo
+            } >> range.txt
+          done
           wc -l range.txt
           cat range.txt
 
