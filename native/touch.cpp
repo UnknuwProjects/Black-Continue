@@ -664,6 +664,11 @@ size_t g_preset = 0;
 float g_opacity = 0.85f;
 float g_scale = 1.0f;  // every control's size, on top of its own
 bool g_fixed_stick = false;  // the stick stays in its place, else it comes down under the thumb
+// which fire buttons turn the view when dragged: both, only the left one, only the right one, neither
+enum FireLook : uint32_t { kLookBoth, kLookLeft, kLookRight, kLookNone, kFireLooks };
+constexpr const char* kFireLookIds[] = {"both", "left", "right", "off"};
+constexpr const char* kFireLookNames[] = {"BOTH", "LEFT", "RIGHT", "OFF"};
+uint32_t g_fire_look = kLookBoth;
 bool g_loaded = false;
 // the editor: the layout before it opened (for Cancel), the control picked
 std::atomic<bool> g_editing{false};
@@ -699,6 +704,9 @@ void LoadLayout() {
         for (uint32_t i = 0; i < kSkins; i++)
             if (skin == kSkinIds[i]) g_skin = i;
         g_fixed_stick = t["stick"].value_or(std::string("floating")) == "fixed";
+        std::string fire_look = t["fire_look"].value_or(std::string(kFireLookIds[g_fire_look]));
+        for (uint32_t i = 0; i < kFireLooks; i++)
+            if (fire_look == kFireLookIds[i]) g_fire_look = i;
         for (size_t i = 0; i <= kButtonCount; i++) {
             // the menus' controls are not in the editor: always the preset's
             if (i != kStick && kButtons[i].when == When::Menus) continue;
@@ -723,7 +731,8 @@ void SaveLayout() {
                         toml::table{{"x", double(p.x)}, {"y", double(p.y)}, {"r", double(p.r)}, {"hidden", p.hidden}});
     }
     toml::table t{{"preset", kPresets[g_preset].id}, {"opacity", double(g_opacity)}, {"scale", double(g_scale)},
-                  {"skin", kSkinIds[g_skin]}, {"stick", g_fixed_stick ? "fixed" : "floating"}, {"controls", controls}};
+                  {"skin", kSkinIds[g_skin]}, {"stick", g_fixed_stick ? "fixed" : "floating"},
+                  {"fire_look", kFireLookIds[g_fire_look]}, {"controls", controls}};
     std::ofstream(LayoutFile()) << t << "\n";
 }
 
@@ -1003,6 +1012,13 @@ void MenuHolds() {
         if (f.role == Role::Cursor && f.menu == MenuTouch::Undecided && now - f.down_ms >= kHoldMs) MenuHold(f);
 }
 
+// a drag from this fire button turns the view, as the option allows, under g_lock
+bool FireLooks(size_t b) {
+    if (!kButtons[b].look) return false;
+    bool left = std::strcmp(kButtons[b].id, "fire_left") == 0;
+    return g_fire_look == kLookBoth || (g_fire_look == kLookLeft && left) || (g_fire_look == kLookRight && !left);
+}
+
 void FingerMove(SDL_FingerID id, float x, float y) {
     for (Finger& f : g_fingers) {
         if (f.id != id) continue;
@@ -1024,7 +1040,7 @@ void FingerMove(SDL_FingerID id, float x, float y) {
             }
         }
         if (f.role == Role::Stick) UpdateStick(f);
-        if (f.role == Role::Look || (f.role == Role::Button && kButtons[f.button].look)) {
+        if (f.role == Role::Look || (f.role == Role::Button && FireLooks(f.button))) {
             float k = kLookCounts / Width();
             input::g_touch_dx += int(std::lround(dx * k));
             input::g_touch_dy += int(std::lround(dy * k));
@@ -1645,6 +1661,19 @@ void StepStickMode(int) {
     std::lock_guard lock(g_lock);
     EnsureLayout();
     g_fixed_stick ^= true;
+    SaveLayout();
+}
+
+const char* FireLookName() {
+    std::lock_guard lock(g_lock);
+    EnsureLayout();
+    return kFireLookNames[g_fire_look];
+}
+
+void StepFireLook(int step) {
+    std::lock_guard lock(g_lock);
+    EnsureLayout();
+    g_fire_look = (g_fire_look + (step > 0 ? 1 : kFireLooks - 1)) % kFireLooks;
     SaveLayout();
 }
 
