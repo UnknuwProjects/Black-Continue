@@ -1,16 +1,13 @@
-# Recompiles default.xbe only (no Gradle) and dumps the callers of sub_0012B3C0. Manual run: Actions > Callers dump > Run workflow.
-# Put this file at .github/workflows/callers-dump.yml (a new name, so it can't be mixed up with the older recompile-grep.yml)
+# Recompiles default.xbe only (no Gradle) and lists every call site of the HUD message functions.
+# Put this file at .github/workflows/callers-dump.yml (replace the old content). Manual run: Actions > Callers dump > Run workflow.
 name: Callers dump
 
 on:
   workflow_dispatch:
     inputs:
-      address:
-        description: "Return address to look up (hex, no 0x)"
-        default: "12B421"
-      ranges:
-        description: "file:start:end, space separated"
-        default: "x86_recomp.32.cpp:3195:3290 x86_recomp.32.cpp:12806:12901 x86_recomp.48.cpp:15392:15487"
+      targets:
+        description: "Functions whose call sites to list, space separated"
+        default: "sub_0012C110 sub_0012F650 sub_001C8D20"
 
 jobs:
   grep:
@@ -63,68 +60,32 @@ jobs:
           :recompile
           "%TOOLS%\xbe_recomp.exe" config\game.toml --xdk "%SDK%\xdk" >nul || exit /b 1
 
-      - name: Grep generated code
+      - name: List callers
         shell: bash
         env:
-          ADDR: ${{ inputs.address }}
+          TARGETS: ${{ inputs.targets }}
         run: |
           set +e +o pipefail
-          out=result.txt
-          g=generated/game
-          ls "$g" | head -20
-          {
-            echo "=== 1. raw hits of the address ($ADDR) ==="
-            grep -rniE "0*$ADDR" "$g" --include=*.cpp --include=*.h | head -40
-            echo
-            echo "=== 2. all sub_${ADDR:0:3}xxx names ==="
-            grep -rhoE "sub_0*${ADDR:0:3}[0-9A-Fa-f]{3}" "$g" | sort -u | tr '\n' ' '
-            echo
-          } > $out
-
-          # the function that holds the address: the largest start <= address
-          target=$((16#$ADDR))
-          best=$(grep -rhoE "sub_0*${ADDR:0:3}[0-9A-Fa-f]{3}" "$g" | sort -u | sed 's/sub_//' \
-            | while read -r h; do v=$((16#$h)); [ $v -le $target ] && echo "$v $h"; done | sort -n | tail -1 | cut -d' ' -f2)
-          echo "=== 3. candidate function: sub_$best ===" >> $out
-          grep -rnE "^[A-Za-z_].*sub_$best\(" "$g" --include=*.cpp --include=*.h >> $out
-          echo >> $out
-          echo "=== 4. its body (definition + 150 lines) ===" >> $out
-          grep -rnE -A150 "^(X86_FUNC|void|static|extern).*sub_$best\(" "$g" --include=*.cpp | head -300 >> $out
-          echo >> $out
-          echo "=== 5. who calls sub_$best ===" >> $out
-          grep -rnE "sub_$best\b" "$g" --include=*.cpp | grep -vE "^[^:]*:[0-9]+:(X86_FUNC|void)" | head -30 >> $out
-          echo >> $out
-          echo "=== 6. who calls sub_001F3A80 right before (same file, 30 lines) ===" >> $out
-          grep -rn -B30 "sub_001F3A80" "$g" --include=*.cpp | grep -n "C9ABBCB2" | head -5 >> $out
-
-          wc -l $out
-          head -c 60000 $out
-
-      - name: Dump code range
-        shell: bash
-        env:
-          RANGES: ${{ inputs.ranges }}
-        run: |
-          set +e +o pipefail
-          echo "VERSION 2: callers dump" > range.txt
-          for r in $RANGES; do
-            F=${r%%:*}; rest=${r#*:}; S=${rest%%:*}; E=${rest#*:}
-            f="generated/game/$F"
+          echo "VERSION 3: call sites" > callers.txt
+          for T in $TARGETS; do
             {
-              echo "######## $F $S-$E"
-              echo "--- function start before the range:"
-              awk -v s="$S" 'NR<s && /^X86_FUNC\(__imp__/ { l=NR": "$0 } END { print l }' "$f"
-              echo "--- code (comments only, instructions dropped):"
-              awk -v s="$S" -v e="$E" 'NR>=s && NR<=e && (/^\t\/\/ / || /^loc_/ || /sub_[0-9A-F]+\(ctx/) { print NR": "$0 }' "$f"
               echo
-            } >> range.txt
+              echo "######## callers of $T (file:line function | the 4 instructions before the call and the call)"
+              awk -v tgt="$T" '
+                /^X86_FUNC\(__imp__/ { fn = $0; sub(/^X86_FUNC\(__imp__/, "", fn); sub(/\).*/, "", fn) }
+                /^\t\/\/ / { l = $0; sub(/^\t\/\/ /, "", l); n++; r[n % 5] = l }
+                index($0, tgt "(ctx, base)") {
+                  s = ""
+                  for (i = n - 4; i <= n; i++) if (i > 0) s = s " ; " r[i % 5]
+                  f = FILENAME; sub(/.*x86_recomp\./, "", f)
+                  print f ":" FNR " " fn " |" s
+                }' generated/game/x86_recomp.*.cpp
+            } >> callers.txt
           done
-          wc -l range.txt
-          cat range.txt
+          wc -l callers.txt
+          head -c 60000 callers.txt
 
       - uses: actions/upload-artifact@v5
         with:
-          name: callers-v2
-          path: |
-            result.txt
-            range.txt
+          name: callers-v3
+          path: callers.txt
