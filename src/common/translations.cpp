@@ -231,6 +231,18 @@ constexpr Entry kEntries[] = {
     {"* SILENCED SOUND ONLY", {{}, {}, {}, {}, u"* Hanya suara disenyapkan"}},
     {"SUPPLIES", {{}, {}, {}, {}, u"Persediaan"}},
     {"FILL MEDKITS", {{}, {}, {}, {}, u"Isi P3K"}},
+
+    // aim mode, fire button aim, and the pad's hint in the panel
+    {"AIM MODE", {{}, {}, {}, {}, u"Mode bidik"}},
+    {"CONTROLS", {{}, {}, {}, {}, u"Kontrol"}},
+    {"TAP + HOLD", {{}, {}, {}, {}, u"Ketuk + tahan"}},
+    {"FIRE BUTTON AIM", {{}, {}, {}, {}, u"Bidik dari tombol tembak"}},
+    {"BOTH", {{}, {}, {}, {}, u"Keduanya"}},
+    {"LEFT", {{}, {}, {}, {}, u"Kiri"}},
+    {"RIGHT", {{}, {}, {}, {}, u"Kanan"}},
+    {"SELECT", {{}, {}, {}, {}, u"Pilih"}},
+    {"CONFIRM", {{}, {}, {}, {}, u"Konfirmasi"}},
+    {"CLOSE", {{}, {}, {}, {}, u"Tutup"}},
 };
 
 bool Same(std::string_view a, std::string_view b) {
