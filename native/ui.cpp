@@ -139,7 +139,7 @@ void NewFrame(float width, float height) {
     constexpr Map kMap[] = {
         {ImGuiKey_GamepadStart, SDL_GAMEPAD_BUTTON_START},       {ImGuiKey_GamepadBack, SDL_GAMEPAD_BUTTON_BACK},
         {ImGuiKey_GamepadFaceDown, SDL_GAMEPAD_BUTTON_SOUTH},    {ImGuiKey_GamepadFaceRight, SDL_GAMEPAD_BUTTON_EAST},
-        {ImGuiKey_GamepadFaceLeft, SDL_GAMEPAD_BUTTON_WEST},     {ImGuiKey_GamepadFaceUp, SDL_GAMEPAD_BUTTON_NORTH},
+        {ImGuiKey_GamepadFaceUp, SDL_GAMEPAD_BUTTON_NORTH},
         {ImGuiKey_GamepadDpadLeft, SDL_GAMEPAD_BUTTON_DPAD_LEFT}, {ImGuiKey_GamepadDpadRight, SDL_GAMEPAD_BUTTON_DPAD_RIGHT},
         {ImGuiKey_GamepadDpadUp, SDL_GAMEPAD_BUTTON_DPAD_UP},    {ImGuiKey_GamepadDpadDown, SDL_GAMEPAD_BUTTON_DPAD_DOWN},
         {ImGuiKey_GamepadL1, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER},  {ImGuiKey_GamepadR1, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER},
