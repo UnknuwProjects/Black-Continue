@@ -754,7 +754,7 @@ void LoadLayout() {
         std::string fire_look = t["fire_look"].value_or(std::string(kFireLookIds[g_fire_look]));
         for (uint32_t i = 0; i < kFireLooks; i++)
             if (fire_look == kFireLookIds[i]) g_fire_look = i;
-        g_aim_hybrid = t["aim_mode"].value_or(std::string("normal")) == "tap_hold";
+        input::g_aim_hybrid = t["aim_mode"].value_or(std::string("normal")) == "tap_hold";
         for (size_t i = 0; i <= kButtonCount; i++) {
             // the menus' controls are not in the editor: always the preset's
             if (i != kStick && kButtons[i].when == When::Menus) continue;
@@ -781,7 +781,7 @@ void SaveLayout() {
     toml::table t{{"preset", kPresets[g_preset].id}, {"opacity", double(g_opacity)}, {"scale", double(g_scale)},
                   {"skin", kSkinIds[g_skin]}, {"stick", g_fixed_stick ? "fixed" : "floating"},
                   {"fire_look", kFireLookIds[g_fire_look]},
-                  {"aim_mode", g_aim_hybrid ? "tap_hold" : "normal"}, {"controls", controls}};
+                  {"aim_mode", input::g_aim_hybrid ? "tap_hold" : "normal"}, {"controls", controls}};
     std::ofstream(LayoutFile()) << t << "\n";
 }
 
@@ -1271,8 +1271,8 @@ void Apply(int port, input::Pad& pad) {
         pad.lx = int16_t(std::clamp(g_stick_x, -1.0f, 1.0f) * 32767.0f);
         pad.ly = int16_t(std::clamp(g_stick_y, -1.0f, 1.0f) * 32767.0f);
     }
-    LatchAim(pad, g_pad_aim);
-    if (g_pad_aim.latched) used = true;
+    input::LatchAim(pad, input::g_pad_aim);
+    if (input::g_pad_aim.latched) used = true;
     if (used) pad.connected = true;
 }
 
@@ -1730,15 +1730,15 @@ const char* FireLookName() {
 const char* AimModeName() {
     std::lock_guard lock(g_lock);
     EnsureLayout();
-    return g_aim_hybrid ? "TAP + HOLD" : "NORMAL";
+    return input::g_aim_hybrid ? "TAP + HOLD" : "NORMAL";
 }
 
 // TAP + HOLD needs the game to take aim as held, so it turns HOLD TO AIM on
 void StepAimMode(int) {
     std::lock_guard lock(g_lock);
     EnsureLayout();
-    g_aim_hybrid = !g_aim_hybrid;
-    if (g_aim_hybrid) game::Opt().hold_aim = true;
+    input::g_aim_hybrid = !input::g_aim_hybrid;
+    if (input::g_aim_hybrid) game::Opt().hold_aim = true;
     SaveLayout();
 }
 
