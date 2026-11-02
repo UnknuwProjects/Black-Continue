@@ -57,6 +57,12 @@ const char* FireLookName();
 void StepFireLook(int step);
 }  // namespace touch
 
+// native/touch.cpp: what was used last
+namespace input {
+bool TouchActive();
+bool KeyboardActive();
+}  // namespace input
+
 // native/dynamic_resolution.cpp: the render resolution in use, percent of the screen's
 namespace dynres {
 uint32_t Percent();
@@ -215,6 +221,7 @@ int OptionRow(const char* label, const char* value) {
         FillItem();
         if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft)) step = -1;
         if (ImGui::IsKeyPressed(ImGuiKey_RightArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight)) step = 1;
+        if (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown, false)) step = 1;  // A, as on the buttons
     }
     RowLabel(box, label);
     ImGui::PushItemFlag(ImGuiItemFlags_NoNav | ImGuiItemFlags_ButtonRepeat, true);  // held arrows keep stepping
@@ -977,6 +984,7 @@ void DrawFooter(float em) {
     const char* hint = "";
     if (g_capture >= 0) hint = "Press a key or mouse button to bind, Escape cancels";
     else if (g_page == kKeyboardPage && g_hovered_box >= 0) hint = "Right click or Delete clears the key";
+    else if (!input::TouchActive() && !input::KeyboardActive()) hint = "D-pad: Select   A: Confirm   B: Close";
     else if (g_page == kCheatsPage) hint = "A weapon replaces the one not in hand, gold names are held";
     ImGui::TextUnformatted(Ui(hint, false).c_str());
     ImGui::PopStyleColor();
