@@ -8,6 +8,15 @@ on:
       address:
         description: "Return address to look up (hex, no 0x)"
         default: "12B421"
+      file:
+        description: "File in generated/game"
+        default: "x86_recomp.32.cpp"
+      start:
+        description: "First line"
+        default: "1130"
+      end:
+        description: "Last line"
+        default: "1330"
 
 jobs:
   grep:
@@ -97,7 +106,28 @@ jobs:
           wc -l $out
           head -c 60000 $out
 
+      - name: Dump code range
+        shell: bash
+        env:
+          F: ${{ inputs.file }}
+          S: ${{ inputs.start }}
+          E: ${{ inputs.end }}
+        run: |
+          set +e +o pipefail
+          f="generated/game/$F"
+          {
+            echo "=== function starts in $F lines $S-$E ==="
+            awk -v s="$S" -v e="$E" 'NR>=s && NR<=e && /^(X86_FUNC|X86_WEAK_FUNC|X86_EXTERN_FUNC|void|static)/ { print NR": "$0 }' "$f"
+            echo
+            echo "=== code $S-$E ==="
+            awk -v s="$S" -v e="$E" 'NR>=s && NR<=e { print NR": "$0 }' "$f"
+          } > range.txt
+          wc -l range.txt
+          cat range.txt
+
       - uses: actions/upload-artifact@v5
         with:
           name: result
-          path: result.txt
+          path: |
+            result.txt
+            range.txt
