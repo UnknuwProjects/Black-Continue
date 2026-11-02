@@ -134,6 +134,14 @@ void Prompts(uint32_t clip, bool keyboard, int depth) {
 X86_EXTERN_FUNC(__imp__sub_001F3A80);
 X86_FUNC(sub_001F3A80) {
     uint32_t id = R32(ctx.esp + 4);
+    if (id == 0xC9ABBCB2) {  // "checkpoint tercapai"
+        if (FILE* f = std::fopen("/storage/emulated/0/Black/SaveData/checkpoint.log", "a")) {
+            std::fprintf(f, "checkpoint string: caller=%08X esp=%08X args=%08X %08X %08X\n", unsigned(R32(ctx.esp)),
+                         unsigned(ctx.esp), unsigned(R32(ctx.esp + 8)), unsigned(R32(ctx.esp + 12)),
+                         unsigned(R32(ctx.esp + 16)));
+            std::fclose(f);
+        }
+    }
     __imp__sub_001F3A80(ctx, base);
     if (uint32_t text = game::OptionsText(id)) {
         ctx.eax = text;
