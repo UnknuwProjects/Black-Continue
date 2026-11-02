@@ -326,28 +326,69 @@ int VkOfButton(uint8_t b) {
 }
 
 // AIM MODE: TAP + HOLD. A tap on aim keeps it on until the next tap, aim held past kAimHoldMs lets go when released.
-// The game must take aim as held (HOLD TO AIM), the button then is all it sees. One state for the touch and pad's
-// side, one for the keys and mouse's, each reading the aim bit (the right thumb) as it came
+// One state for the touch and pad's side, one for the keys and mouse's, each reading the aim bit (the right thumb) as
+// it came. Two ways to the game, by HOLD TO AIM:
+//  - on: the game takes aim as held, so the button is passed as it is (a tap latches it on)
+//  - off: the game's own aim is a toggle on each press, so the press is sent as a short pulse, and when it is let go
+//    after a hold the pulse is sent again: the game scopes out by itself
 std::atomic<bool> g_aim_hybrid{false};
-constexpr uint64_t kAimHoldMs = 250;
+constexpr uint64_t kAimHoldMs = 160;
+constexpr uint64_t kAimPulseMs = 90;  // long enough for the game to see it on a slow frame
+constexpr uint64_t kAimGapMs = 90;    // low between two pulses, or the game sees one press
 constexpr uint16_t kAimBit = 1u << 7;
 struct AimState {
     bool raw = false;      // the button as it was read last
-    bool latched = false;  // on after a tap
-    bool swallow = false;  // this press only took the latch off
+    bool latched = false;  // on after a tap (HOLD TO AIM on)
+    bool swallow = false;  // this press only took the latch off (HOLD TO AIM on)
     uint64_t down_ms = 0;
+    bool scoped = false;   // what the game's toggle is taken to be after our pulses (HOLD TO AIM off)
+    bool entered = false;  // the press now down was the one that scoped in
+    bool high = false;     // the pulse is up
+    int queue = 0;         // pulses still to send
+    uint64_t phase_until = 0;
 };
 AimState g_pad_aim, g_key_aim;
+
+// the queued pulses, one at a time with a gap, in the aim bit
+void PulseAim(Pad& p, AimState& s, uint64_t now) {
+    if (s.high && now >= s.phase_until) {
+        s.high = false;
+        s.phase_until = now + kAimGapMs;
+    }
+    if (!s.high && s.queue > 0 && now >= s.phase_until) {
+        s.high = true;
+        s.queue--;
+        s.phase_until = now + kAimPulseMs;
+    }
+    p.buttons = uint16_t(s.high ? (p.buttons | kAimBit) : (p.buttons & ~kAimBit));
+}
 
 void LatchAim(Pad& p, AimState& s) {
     bool raw = (p.buttons & kAimBit) != 0;
     // off in the menus and the panel too: a latch never outlives the play it was made in
-    if (!g_aim_hybrid || !game::Opt().hold_aim || app::MenuOpen() || !Play()) {
+    if (!g_aim_hybrid || app::MenuOpen() || !Play()) {
         s = AimState{};
         s.raw = raw;
         return;
     }
     uint64_t now = NowMs();
+    if (!game::Opt().hold_aim) {
+        if (raw && !s.raw) {
+            // a press toggles the game's aim: in if it was out, out if it was in
+            s.down_ms = now;
+            s.scoped = !s.scoped;
+            s.entered = s.scoped;
+            s.queue++;
+        } else if (!raw && s.raw && s.entered && now - s.down_ms >= kAimHoldMs) {
+            // aim was held in and is let go: toggle it out again; a short tap leaves it in
+            s.scoped = false;
+            s.entered = false;
+            s.queue++;
+        }
+        s.raw = raw;
+        PulseAim(p, s, now);
+        return;
+    }
     if (raw && !s.raw) {
         s.down_ms = now;
         s.swallow = s.latched;
@@ -410,7 +451,7 @@ static void KeyboardRead(Pad& p) {
 void Keyboard(Pad& p) {
     KeyboardRead(p);
     LatchAim(p, g_key_aim);
-    if (g_key_aim.latched) p.connected = true;
+    if (g_key_aim.latched || g_key_aim.high || g_key_aim.queue) p.connected = true;
 }
 
 void SeenPad(const Pad& p) {
@@ -1272,7 +1313,7 @@ void Apply(int port, input::Pad& pad) {
         pad.ly = int16_t(std::clamp(g_stick_y, -1.0f, 1.0f) * 32767.0f);
     }
     input::LatchAim(pad, input::g_pad_aim);
-    if (input::g_pad_aim.latched) used = true;
+    if (input::g_pad_aim.latched || input::g_pad_aim.high || input::g_pad_aim.queue) used = true;
     if (used) pad.connected = true;
 }
 
@@ -1733,12 +1774,12 @@ const char* AimModeName() {
     return input::g_aim_hybrid ? "TAP + HOLD" : "NORMAL";
 }
 
-// TAP + HOLD needs the game to take aim as held, so it turns HOLD TO AIM on
+// TAP + HOLD sends the game's own toggle (pulses), so it turns HOLD TO AIM off; with it on again the game takes aim as held
 void StepAimMode(int) {
     std::lock_guard lock(g_lock);
     EnsureLayout();
     input::g_aim_hybrid = !input::g_aim_hybrid;
-    if (input::g_aim_hybrid) game::Opt().hold_aim = true;
+    if (input::g_aim_hybrid) game::Opt().hold_aim = false;
     SaveLayout();
 }
 
