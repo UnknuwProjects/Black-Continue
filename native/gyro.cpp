@@ -13,6 +13,7 @@
 
 #include "app/app.h"
 #include "common/mouse_keyboard.h"
+#include "common/options.h"
 #include "core/log.h"
 #include "host.h"
 
@@ -21,8 +22,9 @@ namespace gyro {
 namespace {
 
 constexpr float kDegreesPerCount = 0.05f;  // src/game/mouse.cpp's kDegrees
+constexpr float kAimingZoom = 0.99f;       // game::g_zoom under this is aiming in
 constexpr float kDeadZone = 0.015f;        // radians a second: a hand held still
-constexpr const char* kNames[kModes] = {"OFF", "ON", "FIRE"};
+constexpr const char* kNames[kModes] = {"OFF", "ON", "FIRE", "AIM"};
 
 std::atomic<uint32_t> g_mode{kOff};
 float g_sensitivity = 1.5f;  // view degrees per degree the phone turns
@@ -179,8 +181,10 @@ void Turn(float yaw, float pitch, uint64_t now, uint64_t& last) {
     float dt = last && now > last ? float(now - last) * 1e-9f : 0;
     last = now;
     if (dt <= 0 || dt > 0.1f) return;
-    bool firing = g_mode == kFiring ? touch::Firing() : true;
-    if (!firing || !touch::LookActive()) return;
+    bool active = true;
+    if (g_mode == kFiring) active = touch::Firing();
+    else if (g_mode == kAiming) active = game::g_zoom.load() < kAimingZoom;  // the game's own zoom scale, 1 off the sights
+    if (!active || !touch::LookActive()) return;
     if (std::fabs(yaw) < kDeadZone) yaw = 0;
     if (std::fabs(pitch) < kDeadZone) pitch = 0;
     if (!yaw && !pitch) return;
