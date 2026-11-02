@@ -217,9 +217,15 @@ Pad Poll(int port) {
     bool analog = std::any_of(std::begin(p.analog), std::end(p.analog), [](uint8_t a) { return a > 0x20; });
     if (p.buttons || analog || pushed(p.lx) || pushed(p.ly) || pushed(p.rx) || pushed(p.ry)) touch::PadUsed();
     // the open panel takes the pad: the game sees it connected but untouched
+    // B closes the panel: until it is let go the game does not see it, or the close would also be a melee
+    static bool s_hold_b = false;
     if (app::MenuOpen()) {
         p = Pad{};
         p.connected = true;
+        s_hold_b = true;
+    } else if (s_hold_b) {
+        if (p.analog[1]) p.analog[1] = 0;
+        else s_hold_b = false;
     }
     touch::Apply(port, p);
     if (app::kGame.pad) app::kGame.pad(port, p);
