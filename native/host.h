@@ -72,10 +72,10 @@ void SetSkinTexture(uint64_t texture);
 
 // aiming by turning the phone (gyro.cpp), main thread
 namespace gyro {
-enum Mode : uint32_t { kOff, kAlways, kFiring, kModes };
+enum Mode : uint32_t { kOff, kAlways, kFiring, kAiming, kModes };
 uint32_t CurrentMode();
 const char* ModeName();
-void NextMode();  // off, always on, while firing; saved at once
+void NextMode();  // off, always on, while firing, while aiming; saved at once
 void OnEvent(const SDL_Event& e);
 void Pump();  // the sensor opened while a mode wants it, closed otherwise
 }  // namespace gyro
