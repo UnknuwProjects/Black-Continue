@@ -1,6 +1,6 @@
-# Recompiles default.xbe only (no Gradle) and greps the generated code. Manual run: Actions > Recompile grep > Run workflow.
-# Put this file at .github/workflows/recompile-grep.yml
-name: Recompile grep
+# Recompiles default.xbe only (no Gradle) and dumps the callers of sub_0012B3C0. Manual run: Actions > Callers dump > Run workflow.
+# Put this file at .github/workflows/callers-dump.yml (a new name, so it can't be mixed up with the older recompile-grep.yml)
+name: Callers dump
 
 on:
   workflow_dispatch:
@@ -106,7 +106,7 @@ jobs:
           RANGES: ${{ inputs.ranges }}
         run: |
           set +e +o pipefail
-          : > range.txt
+          echo "VERSION 2: callers dump" > range.txt
           for r in $RANGES; do
             F=${r%%:*}; rest=${r#*:}; S=${rest%%:*}; E=${rest#*:}
             f="generated/game/$F"
@@ -124,7 +124,7 @@ jobs:
 
       - uses: actions/upload-artifact@v5
         with:
-          name: result
+          name: callers-v2
           path: |
             result.txt
             range.txt
