@@ -93,14 +93,52 @@ jobs:
           path: Black-${{ steps.version.outputs.name }}.apk
           if-no-files-found: error
      
+      - name: Changelog
+        shell: bash
+        run: |
+          # Previous release tag (the tag being built is excluded). Without one, every commit is listed.
+          prev=$(git describe --tags --abbrev=0 --match 'v*' --exclude "$GITHUB_REF_NAME" HEAD 2>/dev/null || true)
+          if [ -n "$prev" ]; then range="$prev..HEAD"; else range="HEAD"; fi
+          echo "Changes in $range"
+
+          subjects="$RUNNER_TEMP/subjects.txt"
+          git log "$range" --no-merges --pretty=format:'%s' | tr -d '\r' > "$subjects"
+          echo >> "$subjects"
+
+          # emit <heading> <type regex>: bullets for the commits like "type: text" or "type(scope): text"
+          emit() {
+            local items
+            items=$(grep -E "^($2)(\([^)]*\))?!?: " "$subjects" \
+              | sed -E 's/^[a-z0-9]+(\([^)]*\))?!?: //' \
+              | awk '{ print "* " toupper(substr($0,1,1)) substr($0,2) }' || true)
+            if [ -n "$items" ]; then printf '**%s**\n\n%s\n\n' "$1" "$items"; fi
+          }
+
+          {
+            emit "New"          'feat'
+            emit "Fixes"        'fix'
+            emit "Improvements" 'perf|refactor|ui'
+            emit "Translations" 'i18n|l10n'
+            # commits without any "type:" prefix
+            other=$(grep -vE '^[a-z0-9]+(\([^)]*\))?!?: ' "$subjects" | grep -v '^$' \
+              | awk '{ print "* " toupper(substr($0,1,1)) substr($0,2) }' || true)
+            if [ -n "$other" ]; then printf '**Other**\n\n%s\n\n' "$other"; fi
+          } > "$RUNNER_TEMP/changes.md"
+
+          if [ ! -s "$RUNNER_TEMP/changes.md" ]; then echo "* Internal fixes and improvements." > "$RUNNER_TEMP/changes.md"; fi
+          cat "$RUNNER_TEMP/changes.md"
+
       - name: Release notes
         shell: bash
         run: |
           apk="Black-${{ steps.version.outputs.name }}.apk"
           size=$(awk -v b="$(stat -c %s "$apk")" 'BEGIN { printf "%.1f MB", b / 1048576 }')
           sha=$(sha256sum "$apk" | cut -d' ' -f1)
+          # put the changelog in place of {{CHANGES}}, then fill in the other placeholders
+          awk -v f="$RUNNER_TEMP/changes.md" 'index($0, "{{CHANGES}}") { while ((getline l < f) > 0) print l; next } { print }' \
+              ci/release-notes.md > "$RUNNER_TEMP/notes-stage.md"
           sed -e "s|{{VERSION}}|$GITHUB_REF_NAME|g" -e "s|{{TAG}}|$GITHUB_REF_NAME|g" -e "s|{{APK}}|$apk|g" \
-              -e "s|{{SIZE}}|$size|g" -e "s|{{SHA256}}|$sha|g" ci/release-notes.md > "$RUNNER_TEMP/release-notes.md"
+              -e "s|{{SIZE}}|$size|g" -e "s|{{SHA256}}|$sha|g" "$RUNNER_TEMP/notes-stage.md" > "$RUNNER_TEMP/release-notes.md"
 
       - name: Release
         uses: softprops/action-gh-release@v2
