@@ -1083,6 +1083,31 @@ void KeyEvent(const SDL_KeyboardEvent& k) {
     if (vk == VK_RETURN) input::OnChar('\r');
 }
 
+// a pad's two sticks pressed together open the settings panel as F10 does on a keyboard, and B closes it again. Polled
+// each turn of the event loop, so it needs no event of its own
+void PadPanel() {
+    static bool combo_held = false, back_held = false;
+    bool combo = false, back = false;
+    int n = 0;
+    if (SDL_JoystickID* ids = SDL_GetGamepads(&n)) {
+        for (int i = 0; i < n; i++) {
+            SDL_Gamepad* pad = SDL_GetGamepadFromID(ids[i]);
+            if (!pad) continue;
+            if (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_LEFT_STICK) &&
+                SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_RIGHT_STICK))
+                combo = true;
+            if (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_EAST)) back = true;
+        }
+        SDL_free(ids);
+    }
+    if (host::Foreground()) {
+        if (combo && !combo_held) app::ToggleMenu();
+        else if (back && !back_held && app::MenuOpen() && !app::Capturing()) app::ToggleMenu();
+    }
+    combo_held = combo;
+    back_held = back;
+}
+
 }  // namespace
 
 bool OnEvent(const SDL_Event& e) {
@@ -1700,6 +1725,7 @@ bool Firing() {
 // main thread, each turn of the event loop: the on-screen keyboard while a name is typed
 void Pump() {
     gyro::Pump();
+    PadPanel();
     // a mouse in play is captured as on a PC: no pointer over the picture and no screen edge to stop a turn. Let go
     // in the menus, the panel, the background and once the touch screen is used; asked again whenever Android took
     // it away

@@ -215,6 +215,11 @@ Pad Poll(int port) {
     ShapeSticks(p);
     bool analog = std::any_of(std::begin(p.analog), std::end(p.analog), [](uint8_t a) { return a > 0x20; });
     if (p.buttons || analog || pushed(p.lx) || pushed(p.ly) || pushed(p.rx) || pushed(p.ry)) touch::PadUsed();
+    // the open panel takes the pad: the game sees it connected but untouched
+    if (app::MenuOpen()) {
+        p = Pad{};
+        p.connected = true;
+    }
     touch::Apply(port, p);
     if (app::kGame.pad) app::kGame.pad(port, p);
     return p;
