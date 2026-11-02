@@ -221,7 +221,6 @@ int OptionRow(const char* label, const char* value) {
         FillItem();
         if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft)) step = -1;
         if (ImGui::IsKeyPressed(ImGuiKey_RightArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight)) step = 1;
-        if (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown, false)) step = 1;  // A, as on the buttons
     }
     RowLabel(box, label);
     ImGui::PushItemFlag(ImGuiItemFlags_NoNav | ImGuiItemFlags_ButtonRepeat, true);  // held arrows keep stepping
