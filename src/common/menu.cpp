@@ -55,6 +55,8 @@ const char* StickModeName();
 void StepStickMode(int step);
 const char* FireLookName();
 void StepFireLook(int step);
+const char* AimModeName();
+void StepAimMode(int step);
 }  // namespace touch
 
 // native/touch.cpp: what was used last
@@ -211,7 +213,7 @@ void FillItem() {
 }
 
 // label left, arrows and value right, the row is the only nav stop
-int OptionRow(const char* label, const char* value) {
+int OptionRow(const char* label, const char* value, bool confirm = false) {
     const ImGuiStyle& style = ImGui::GetStyle();
     RowBox box = MeasureRow();
     ImGui::PushID(label);
@@ -221,6 +223,7 @@ int OptionRow(const char* label, const char* value) {
         FillItem();
         if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft)) step = -1;
         if (ImGui::IsKeyPressed(ImGuiKey_RightArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight)) step = 1;
+        if (confirm && ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown, false)) step = 1;  // A, on a row with no arrows' worth
     }
     RowLabel(box, label);
     ImGui::PushItemFlag(ImGuiItemFlags_NoNav | ImGuiItemFlags_ButtonRepeat, true);  // held arrows keep stepping
@@ -259,7 +262,7 @@ enum RowId { kRenderResolution, kMaxFps, kVsync, kFpsCounter, kAniso, kReloadBlu
              kCheckUpdates, kTouchSensitivity, kLeftDeadzone, kRightDeadzone, kLeftSensitivity, kRightSensitivity,
              kScreenFilter, kGyroInvertX, kGyroInvertY, kUnlockLevels, kUnlockBlackOps, kTouchSkin, kCredit, kBloom,
              kFog, kAntiAliasing, kHdr, kEsp, kAimbot, kTouchStick, kDynamicRes, kDynamicTarget, kDynamicMin,
-             kDynamicMax, kDynamicHold, kAutoUpdate, kInfiniteMedkits, kTouchFireLook };
+             kDynamicMax, kDynamicHold, kAutoUpdate, kInfiniteMedkits, kTouchFireLook, kTouchAim };
 
 using rows::Kind;
 using rows::Row;
@@ -300,6 +303,7 @@ constexpr Row kTouchRows[] = {
     {Kind::Value, kTouchSkin, "BUTTON STYLE"},
     {Kind::Value, kTouchStick, "ANALOG STICK"},
     {Kind::Value, kTouchFireLook, "FIRE BUTTON AIM"},
+    {Kind::Value, kTouchAim, "AIM MODE"},
     {Kind::Value, kTouchEdit, "EDIT CONTROLS POSITION"},
     {Kind::Heading, -1, "MOTION CONTROLS"},
     {Kind::Value, kGyro, "GYROSCOPE"},
@@ -603,9 +607,17 @@ void StepInputRow(int id, int step, char (&text)[64]) {
             if (step) touch::StepFireLook(step);
             std::snprintf(text, sizeof(text), "%s", touch::FireLookName());
             break;
+        case kTouchAim:
+            // a tap keeps aim on, a hold aims while held; for every input
+            if (step) touch::StepAimMode(step);
+            std::snprintf(text, sizeof(text), "%s", touch::AimModeName());
+            break;
         case kTouchEdit:
-            // any step opens the editor over the screen
-            if (step) touch::EditLayout();
+            // any step opens the editor over the screen; from the panel it closes, the editor is on the screen alone
+            if (step) {
+                touch::EditLayout();
+                if (MenuOpen()) ToggleMenu();
+            }
             std::snprintf(text, sizeof(text), "OPEN");
             break;
         case kCheckUpdates:
@@ -779,6 +791,7 @@ int g_hovered_box = -1;  // the box under the mouse or focused with a key in it,
 bool g_capture_armed = false;
 int g_capture_done = 0;  // frame of the last bind, the key that bound must not start another
 int g_page = kCheatsPage;
+std::atomic<bool> g_page_flip{false};  // the pad's L1 or R1, taken by the next frame
 // the action's key and its alternate as their boxes show them, the alternate blank when there is none
 std::vector<std::string> KeyBoxes(size_t action) {
     std::string keys = input::Binding(action);
@@ -850,7 +863,7 @@ void PollCapture() {
 bool CaptureFree() { return g_capture < 0 && ImGui::GetFrameCount() > g_capture_done + 1; }
 
 void ValueRow(const Row& r) {
-    int step = OptionRow(r.label, Ui(RowText(r.id, 0)).c_str());
+    int step = OptionRow(r.label, Ui(RowText(r.id, 0)).c_str(), rows::Opens(r));
     if (step) RowText(r.id, step);
 }
 
@@ -967,13 +980,28 @@ void Defaults() {
     RestoreDefaults(g_page);
 }
 
-// the panel is the cheats alone, the touch button's way to them in play; every other setting is in the game's own
-// options menu
-void DrawTitle(const char* caption) {
-    std::string title = Ui(caption);
-    float title_pad = (ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(title.c_str()).x) * 0.5f;
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(title_pad, 0.0f));
-    ImGui::TextUnformatted(title.c_str());
+// the panel's two pages, the cheats and the touch controls, as tabs; the pad's L1 and R1 switch them
+void DrawTabs() {
+    if (g_page_flip.exchange(false)) g_page = g_page == kCheatsPage ? kTouchPage : kCheatsPage;
+    if (g_page != kCheatsPage && g_page != kTouchPage) g_page = kCheatsPage;
+    struct Tab {
+        int page;
+        const char* label;
+    };
+    static const Tab kTabs[] = {{kCheatsPage, "CHEATS"}, {kTouchPage, "CONTROLS"}};
+    float gap = ImGui::GetStyle().ItemSpacing.x;
+    float w = (ImGui::GetContentRegionAvail().x - gap) / 2;
+    ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);  // the d-pad stays on the rows
+    for (size_t i = 0; i < std::size(kTabs); i++) {
+        if (i) ImGui::SameLine();
+        bool on = g_page == kTabs[i].page;
+        ImGui::PushStyleColor(ImGuiCol_Text, on ? kHeading : kDim);
+        ImGui::PushStyleColor(ImGuiCol_Button, on ? ImGui::GetStyleColorVec4(ImGuiCol_Header)
+                                                  : ImGui::GetStyleColorVec4(ImGuiCol_Button));
+        if (ImGui::Button(Ui(kTabs[i].label).c_str(), ImVec2(w, 0))) g_page = kTabs[i].page;
+        ImGui::PopStyleColor(2);
+    }
+    ImGui::PopItemFlag();
 }
 
 // the hint line, then Back and Defaults on the right
@@ -983,16 +1011,20 @@ void DrawFooter(float em) {
     const char* hint = "";
     if (g_capture >= 0) hint = "Press a key or mouse button to bind, Escape cancels";
     else if (g_page == kKeyboardPage && g_hovered_box >= 0) hint = "Right click or Delete clears the key";
-    else if (!input::TouchActive() && !input::KeyboardActive()) hint = "D-pad: Select   A: Confirm   B: Close";
+    else if (!input::TouchActive() && !input::KeyboardActive()) hint = "D-pad: Select   A: Confirm   B: Close   L1/R1: Page";
     else if (g_page == kCheatsPage) hint = "A weapon replaces the one not in hand, gold names are held";
     ImGui::TextUnformatted(Ui(hint, false).c_str());
     ImGui::PopStyleColor();
     float bw = em * 8;
-    float buttons_pad = ImGui::GetContentRegionAvail().x - bw * 2 - ImGui::GetStyle().ItemSpacing.x;
+    // Defaults restores the cheats; the touch page has no undo of its own
+    bool defaults = g_page == kCheatsPage;
+    float buttons_pad = ImGui::GetContentRegionAvail().x - bw * (defaults ? 2 : 1) - (defaults ? ImGui::GetStyle().ItemSpacing.x : 0);
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(buttons_pad, 0.0f));
     if (ImGui::Button(Ui("Back", false).c_str(), ImVec2(bw, 0))) ToggleMenu();
-    ImGui::SameLine();
-    if (ImGui::Button(Ui("Defaults", false).c_str(), ImVec2(bw, 0))) Defaults();
+    if (defaults) {
+        ImGui::SameLine();
+        if (ImGui::Button(Ui("Defaults", false).c_str(), ImVec2(bw, 0))) Defaults();
+    }
 }
 
 // in the rows' child: a finger dragged up or down scrolls them as a phone's lists do, then glides a little when it
@@ -1050,7 +1082,7 @@ void DrawPanel() {
     constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
                                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar;
     if (ImGui::Begin("##settings", nullptr, kFlags)) {
-        DrawTitle("CHEATS");
+        DrawTabs();
         ImGui::Separator();
         float footer = ImGui::GetTextLineHeightWithSpacing() + ImGui::GetFrameHeightWithSpacing() + em;
         // a scrollbar a thumb can take, not the desktop's thin one
@@ -1058,6 +1090,11 @@ void DrawPanel() {
         ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarRounding, 0.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_GrabMinSize, em * 2.5f);
         ImGui::BeginChild("##rows", ImVec2(0, -footer), ImGuiChildFlags_NavFlattened);
+        static int s_shown = -1;
+        if (s_shown != g_page) {  // the other page starts at its top
+            ImGui::SetScrollY(0);
+            s_shown = g_page;
+        }
         DragScroll(em);
         g_hovered_box = -1;
         DrawRows(g_page);
@@ -1176,6 +1213,8 @@ bool rows::Opens(const Row& row) {
 bool MenuOpen() { return g_open.load(std::memory_order_relaxed); }
 
 bool Capturing() { return g_capture >= 0; }
+
+void SwitchPanelPage() { g_page_flip.store(true); }
 
 void ToggleMenu() {
     bool open = !MenuOpen();
