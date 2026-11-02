@@ -29,13 +29,7 @@
 
 ## What's New in {{VERSION}}
 
-* **Suppressor menu rework:** The weapon list is now split into two groups.
-  * **Supported Suppressor:** the ten weapons with a real in-game suppressor (AK-47, G36C, Glock, M16, M16A2 + M203, MAC-10, MP5, P90, Pistol, Uzi). One entry per weapon, spawns suppressed, and Y attaches or removes it as in the original game.
-  * **Unsupported Suppressor (Experimental):** Grenade Launcher, M249, Magnum, RPG, Remington 870, SPAS 12 and Walther 2000, each with a plain and a permanently suppressed variant.
-* **Silenced audio on all variants:** Suppressed variants play the silenced fire sound. M249, Magnum, Remington 870, SPAS 12 and Walther 2000 also change their muzzle flash. RPG and Grenade Launcher are audio only (marked with *).
-* **Infinite Medkits:** New cheat under Player. The medkit count stays at maximum, and the setting is saved with the other cheats.
-* **Panel polish:** Clearer group headings, shorter labels, and no more clipped text in the weapon list.
-* **Indonesian translation:** The new panel text is translated.
+{{CHANGES}}
 
 ---
 
