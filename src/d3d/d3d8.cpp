@@ -1,6 +1,7 @@
 // Direct3D 8 (XDK 5849) entry points the title calls, implemented on the host renderer.
 // Resource creation, locking and the XG helpers stay recompiled: they only manage memory.
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -238,41 +239,51 @@ void ApplyDefaultStates(X86Context& ctx) {
 #endif
 }
 
-// The gun's draws moved in the view, not on the screen: its program takes the position through the matrix in c10..c13
-// (x, y, z, w rows; each ends in the term added to the clip position). A step along the view's right or up moves the
-// clip position by the row's scale times it, so what is near moves more than what is far, as a gun held in the middle
+// The gun's draws moved: its program takes the position through the matrix in c10..c13 (the x, y, z and w rows, each
+// ending in the term added to the clip position). A step in the view (dx right, dy up, in view units) is added to the
+// x and y rows' last term by their scale, so what is near moves more than what is far. A share of the clip w
+// (fx, fy: right and up, as the screen's -1..1) moves everything alike
 bool g_gun_draw = false;
-float g_gun_dx = 0.0f;  // right, in view units
-float g_gun_dy = 0.0f;  // up
+float g_gun_move[4] = {};  // dx, dy, fx, fy
 
-bool GunPush(float saved[2]) {
-    if (!g_gun_draw || (g_gun_dx == 0 && g_gun_dy == 0)) return false;
+struct GunRows {
+    float x[4], y[4];
+};
+
+bool GunPush(GunRows& saved) {
+    const float* m = g_gun_move;
+    if (!g_gun_draw || (!m[0] && !m[1] && !m[2] && !m[3])) return false;
     auto& x = g_state.vsc[10];
     auto& y = g_state.vsc[11];
     const auto& w = g_state.vsc[13];
     float depth = std::hypot(w[0], w[1], w[2]);
     if (depth < 0.9f || depth > 1.1f) return false;  // not the projection's rows
-    saved[0] = x[3];
-    saved[1] = y[3];
-    x[3] += std::hypot(x[0], x[1], x[2]) * g_gun_dx;
-    y[3] += std::hypot(y[0], y[1], y[2]) * g_gun_dy;
+    std::memcpy(saved.x, x.data(), 16);
+    std::memcpy(saved.y, y.data(), 16);
+    float sx = std::hypot(x[0], x[1], x[2]);
+    float sy = std::hypot(y[0], y[1], y[2]);
+    x[3] += sx * m[0];
+    y[3] += sy * m[1];
+    for (int i = 0; i < 4; i++) {
+        x[i] += m[2] * w[i];
+        y[i] += m[3] * w[i];
+    }
     return true;
 }
 
-void GunPop(const float saved[2]) {
-    g_state.vsc[10][3] = saved[0];
-    g_state.vsc[11][3] = saved[1];
+void GunPop(const GunRows& saved) {
+    std::memcpy(g_state.vsc[10].data(), saved.x, 16);
+    std::memcpy(g_state.vsc[11].data(), saved.y, 16);
 }
 
 }  // namespace
 
 gpu::State& State() { return g_state; }
 
-void GunDraw(bool on, float dx, float dy) {
+void GunDraw(bool on, const float move[4]) {
     std::lock_guard<std::recursive_mutex> lock(g_lock);
     g_gun_draw = on;
-    g_gun_dx = dx;
-    g_gun_dy = dy;
+    for (int i = 0; i < 4; i++) g_gun_move[i] = on ? move[i] : 0;
 }
 std::recursive_mutex& Lock() { return g_lock; }
 
@@ -1060,7 +1071,7 @@ HLE_STDCALL(D3DDevice_SetPixelShaderConstant, 3) {
 HLE_STDCALL(D3DDevice_DrawVertices, 3) {
     std::lock_guard<std::recursive_mutex> lock(g_lock);
     SyncDeferred();
-    float saved[2];
+    GunRows saved;
     bool moved = GunPush(saved);
     if (g_backend) g_backend->Draw(g_state, a[0], a[1], a[2], nullptr);
     if (moved) GunPop(saved);
@@ -1071,7 +1082,7 @@ HLE_STDCALL(D3DDevice_DrawIndexedVertices, 3) {
     std::lock_guard<std::recursive_mutex> lock(g_lock);
     SyncDeferred();
     const uint8_t* indices = a[2] ? static_cast<const uint8_t*>(HostPtr(a[2])) : nullptr;
-    float saved[2];
+    GunRows saved;
     bool moved = GunPush(saved);
     if (g_backend) g_backend->Draw(g_state, a[0], 0, a[1], indices);
     if (moved) GunPop(saved);
