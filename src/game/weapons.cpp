@@ -15,6 +15,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <mutex>
 #include <set>
@@ -62,6 +63,20 @@ constexpr uint32_t kModeActive = 0x21070;
 constexpr uint32_t kModeMission = 0x20F78;
 constexpr uint32_t kCheckpointFlag = 0x2F3BF8;  // byte: a checkpoint is held
 constexpr uint32_t kContinueCheckpoint = 0x1240D0;  // no arguments: reloads the mission from the held checkpoint
+// the checkpoint the game's snapshot (sub_001C8D20) takes, and the file that keeps it
+constexpr uint32_t kCpSection = 0x2A7EDC;  // int: the section of the checkpoint
+constexpr uint32_t kCpTime = 0x2F3BF4;     // float: the mission time
+constexpr uint32_t kCpBuffer = 0x2F3BFC;   // pointer: the buffer the section's state is copied to
+constexpr uint32_t kCpBytes = 0x2F3C00;    // bytes 0..5, a word at 8 and one at 0xC of the game state's copy
+constexpr uint32_t kCpMark = 0x2EC464;
+constexpr uint32_t kCpStructSize = 0x50;   // the snapshot's struct: weapons, ammunition, medkits (+0x50 a buffer pointer)
+constexpr uint32_t kCpStructBuffer = 0x50;
+constexpr uint32_t kCpEntry = 12;          // the section buffer's entry size
+constexpr uint32_t kWorldSections = 0x930;  // pointer, +4 the entries' count
+constexpr uint32_t kWorldSectionCount = 0x934;
+constexpr uint32_t kWorldLevelIds = 0x5AEC;  // two bytes: the mission and the level
+constexpr uint32_t kCpMagic = 0x31504342;    // "BCP1"
+const char* const kCpFile = "/storage/emulated/0/Black/SaveData/checkpoint.sav";
 // player
 constexpr uint32_t kPlayerKind = 0xC4;
 constexpr uint32_t kKindPlayer = 2;
@@ -604,11 +619,121 @@ void DoGive(X86Context& ctx, int code) {
     Refresh();
 }
 
+// ---- the checkpoint file: the state the game's snapshot keeps, so a later run can continue from it --------------
+
+void Put32(std::vector<uint8_t>& v, uint32_t x) {
+    for (int i = 0; i < 4; i++) v.push_back(uint8_t(x >> (8 * i)));
+}
+
+void PutBytes(std::vector<uint8_t>& v, uint32_t guest, uint32_t n) {
+    const uint8_t* p = static_cast<const uint8_t*>(HostPtr(guest));
+    v.insert(v.end(), p, p + n);
+}
+
+struct Reader {
+    const std::vector<uint8_t>& d;
+    size_t at = 0;
+    bool ok = true;
+    uint32_t U32() {
+        if (at + 4 > d.size()) return ok = false, 0;
+        uint32_t x = 0;
+        for (int i = 0; i < 4; i++) x |= uint32_t(d[at + i]) << (8 * i);
+        at += 4;
+        return x;
+    }
+    const uint8_t* Bytes(size_t n) {
+        if (at + n > d.size()) return ok = false, nullptr;
+        const uint8_t* p = &d[at];
+        at += n;
+        return p;
+    }
+};
+
+uint32_t LevelIds(uint32_t world) { return uint32_t(G<uint8_t>(world + kWorldLevelIds)) | uint32_t(G<uint8_t>(world + kWorldLevelIds + 1)) << 8; }
+
+// after the game's snapshot: s the struct it filled (ebx)
+void SaveCheckpointFile(uint32_t s) {
+    uint32_t world = R32(kWorld);
+    uint32_t manager = R32(kWeaponManager), table = manager ? R32(manager) : 0;
+    uint32_t count = world ? R32(world + kWorldSectionCount) : 0;
+    uint32_t buf1 = R32(kCpBuffer), buf2 = s ? R32(s + kCpStructBuffer) : 0;
+    uint32_t size2 = table ? G<uint8_t>(table + kTableCount) : 0;
+    if (!world || !s || s < world || s - world >= 0x10000 || !buf1 || !buf2 || !size2 || count > 4096) {
+        DiagLog("weapons: checkpoint not kept (world=%08X struct=%08X buf=%08X/%08X count=%u)", unsigned(world), unsigned(s),
+                unsigned(buf1), unsigned(buf2), unsigned(count));
+        return;
+    }
+    std::vector<uint8_t> d;
+    Put32(d, kCpMagic);
+    Put32(d, LevelIds(world));
+    Put32(d, R32(kCpSection));
+    Put32(d, R32(kCpTime));
+    Put32(d, s - world);
+    Put32(d, count);
+    Put32(d, size2);
+    PutBytes(d, kCpBytes, 6);
+    PutBytes(d, kCpBytes + 8, 2);
+    PutBytes(d, kCpBytes + 0xC, 2);
+    PutBytes(d, s, kCpStructSize);
+    PutBytes(d, buf1, count * kCpEntry);
+    PutBytes(d, buf2, size2);
+    std::string tmp = std::string(kCpFile) + ".tmp";
+    {
+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        f.write(reinterpret_cast<const char*>(d.data()), std::streamsize(d.size()));
+        if (!f) return DiagLog("weapons: checkpoint file not written");
+    }
+    std::rename(tmp.c_str(), kCpFile);
+    DiagLog("weapons: checkpoint kept (section %d, %u bytes)", int(R32(kCpSection)), unsigned(d.size()));
+}
+
+// the kept checkpoint back into the game's memory, when this level is the one it was taken in; "" when done
+std::string LoadCheckpointFile() {
+    std::ifstream f(kCpFile, std::ios::binary);
+    if (!f) return "No checkpoint yet";
+    std::vector<uint8_t> d((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    Reader r{d};
+    if (r.U32() != kCpMagic) return "Checkpoint file is invalid";
+    uint32_t ids = r.U32(), section = r.U32(), time = r.U32(), s_offset = r.U32(), count = r.U32(), size2 = r.U32();
+    const uint8_t* bytes_a = r.Bytes(6);
+    const uint8_t* bytes_b = r.Bytes(2);
+    const uint8_t* bytes_c = r.Bytes(2);
+    const uint8_t* s_data = r.Bytes(kCpStructSize);
+    const uint8_t* buf1_data = r.ok && count <= 4096 ? r.Bytes(count * kCpEntry) : nullptr;
+    const uint8_t* buf2_data = r.ok && size2 <= 256 ? r.Bytes(size2) : nullptr;
+    if (!r.ok || !buf1_data || !buf2_data || s_offset >= 0x10000) return "Checkpoint file is invalid";
+    uint32_t world = R32(kWorld);
+    uint32_t manager = R32(kWeaponManager), table = manager ? R32(manager) : 0;
+    if (!world || !table) return "Only during a level";
+    if (LevelIds(world) != ids || R32(world + kWorldSectionCount) != count || G<uint8_t>(table + kTableCount) != size2)
+        return "Checkpoint is from another level";
+    uint32_t s = world + s_offset, buf1 = R32(kCpBuffer), buf2 = R32(s + kCpStructBuffer);
+    if (!buf1 || !buf2) {
+        DiagLog("weapons: checkpoint buffers not ready (%08X, %08X)", unsigned(buf1), unsigned(buf2));
+        return "Not ready";
+    }
+    std::memcpy(HostPtr(s), s_data, kCpStructSize);
+    std::memcpy(HostPtr(buf1), buf1_data, count * kCpEntry);
+    std::memcpy(HostPtr(buf2), buf2_data, size2);
+    std::memcpy(HostPtr(kCpBytes), bytes_a, 6);
+    std::memcpy(HostPtr(kCpBytes + 8), bytes_b, 2);
+    std::memcpy(HostPtr(kCpBytes + 0xC), bytes_c, 2);
+    W32(kCpSection, section);
+    W32(kCpTime, time);
+    W32(kCpMark, 1);
+    G<uint8_t>(kCheckpointFlag) = 1;
+    DiagLog("weapons: checkpoint read from the file (section %d)", int(section));
+    return "";
+}
+
 // the game's own retry from the last checkpoint; only with a checkpoint held and the mission running
 void DoContinue(X86Context& ctx) {
     Level l;
     if (!ReadLevel(l)) return SetStatus("Only during a level");
-    if (!G<uint8_t>(kCheckpointFlag)) return SetStatus("No checkpoint yet");
+    if (!G<uint8_t>(kCheckpointFlag)) {  // none in memory: the one a run before kept in the file
+        std::string error = LoadCheckpointFile();
+        if (!error.empty()) return SetStatus(error);
+    }
     uint32_t mgr = R32(kModeManager);
     if (!mgr || R32(mgr + kModeStep) != 0 || R32(mgr + kModeActive) != mgr + kModeMission) {
         DiagLog("weapons: continue refused, manager=%08X step=%u active=%08X", unsigned(mgr),
@@ -789,3 +914,12 @@ X86_FUNC(sub_001CEE10) {
 // the game's pickup message: kept as a plain pass-through (the recompiler's hook list may still name it)
 X86_EXTERN_FUNC(__imp__sub_0012B510);
 X86_FUNC(sub_0012B510) { __imp__sub_0012B510(ctx, base); }
+
+// The game's checkpoint snapshot (eax the section, ebx the struct it fills): once it is taken its state is also kept in
+// a file, for a later run to continue from.
+X86_EXTERN_FUNC(__imp__sub_001C8D20);
+X86_FUNC(sub_001C8D20) {
+    uint32_t s = ctx.ebx;
+    __imp__sub_001C8D20(ctx, base);
+    SaveCheckpointFile(s);
+}
