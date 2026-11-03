@@ -1,4 +1,4 @@
-# Recompiles default.xbe only (no Gradle) and lists every call site of the HUD message functions.
+# Recompiles default.xbe only (no Gradle) and dumps the checkpoint message code (callers, bodies, users of its globals).
 # Put this file at .github/workflows/callers-dump.yml (replace the old content). Manual run: Actions > Callers dump > Run workflow.
 name: Callers dump
 
@@ -7,7 +7,13 @@ on:
     inputs:
       targets:
         description: "Functions whose call sites to list, space separated"
-        default: "sub_0012C110 sub_0012F650 sub_001C8D20"
+        default: "sub_001EB7F0"
+      functions:
+        description: "Functions whose whole body to print, space separated"
+        default: "sub_001EB7F0 sub_001C8D20"
+      globals:
+        description: "Data addresses (8 hex digits) whose users to list, space separated"
+        default: "002A7EDC 002F3BF4 002F3BF8"
 
 jobs:
   grep:
@@ -60,13 +66,15 @@ jobs:
           :recompile
           "%TOOLS%\xbe_recomp.exe" config\game.toml --xdk "%SDK%\xdk" >nul || exit /b 1
 
-      - name: List callers
+      - name: Dump
         shell: bash
         env:
           TARGETS: ${{ inputs.targets }}
+          FUNCTIONS: ${{ inputs.functions }}
+          GLOBALS: ${{ inputs.globals }}
         run: |
           set +e +o pipefail
-          echo "VERSION 3: call sites" > callers.txt
+          echo "VERSION 4: bodies, callers, globals" > out.txt
           for T in $TARGETS; do
             {
               echo
@@ -80,12 +88,33 @@ jobs:
                   f = FILENAME; sub(/.*x86_recomp\./, "", f)
                   print f ":" FNR " " fn " |" s
                 }' generated/game/x86_recomp.*.cpp
-            } >> callers.txt
+            } >> out.txt
           done
-          wc -l callers.txt
-          head -c 60000 callers.txt
+          for F in $FUNCTIONS; do
+            {
+              echo
+              echo "######## body of $F (instruction comments and labels)"
+              awk -v name="$F" '
+                $0 ~ "^X86_FUNC\\(__imp__" name "\\)" { on = 1; f = FILENAME; sub(/.*x86_recomp\./, "", f); print "file " f " line " FNR }
+                on && (/^\t\/\/ / || /^loc_/) { l = $0; sub(/^\t\/\/ /, "", l); print l }
+                $0 ~ "^X86_WEAK_FUNC\\(" name "," { on = 0 }
+              ' generated/game/x86_recomp.*.cpp
+            } >> out.txt
+          done
+          for G in $GLOBALS; do
+            {
+              echo
+              echo "######## users of 0x$G (function | instruction)"
+              awk -v g="$G" '
+                /^X86_FUNC\(__imp__/ { fn = $0; sub(/^X86_FUNC\(__imp__/, "", fn); sub(/\).*/, "", fn) }
+                /^\t\/\/ / && index($0, "0x" g) { l = $0; sub(/^\t\/\/ /, "", l); print fn " | " l }
+              ' generated/game/x86_recomp.*.cpp
+            } >> out.txt
+          done
+          wc -l out.txt
+          head -c 60000 out.txt
 
       - uses: actions/upload-artifact@v5
         with:
-          name: callers-v3
-          path: callers.txt
+          name: callers-v4
+          path: out.txt
