@@ -7,19 +7,19 @@ on:
     inputs:
       targets:
         description: "Functions whose call sites to list, space separated"
-        default: "sub_0020CE00 sub_0020CD50 sub_001B79D0 sub_001DEC70"
+        default: ""
       functions:
         description: "Functions whose whole body to print, space separated"
-        default: "sub_0020CE00 sub_0020CD50 sub_001B79D0"
+        default: ""
       globals:
         description: "Data addresses (8 hex digits) whose users to list, space separated"
         default: ""
       both:
         description: "Instruction patterns separated by |, lists functions that contain all of them"
-        default: ""
+        default: "0020D36A"
       both2:
         description: "Same, second set"
-        default: ""
+        default: "0020F79B"
       both3:
         description: "Same, third set"
         default: ""
@@ -86,7 +86,7 @@ jobs:
           BOTH3: ${{ inputs.both3 }}
         run: |
           set +e +o pipefail
-          echo "VERSION 8: bodies, callers, globals, pattern sets" > out.txt
+          echo "VERSION 9: bodies, callers, globals, pattern sets" > logv9.txt
           for T in $TARGETS; do
             {
               echo
@@ -100,7 +100,7 @@ jobs:
                   f = FILENAME; sub(/.*x86_recomp\./, "", f)
                   print f ":" FNR " " fn " |" s
                 }' generated/game/x86_recomp.*.cpp
-            } >> out.txt
+            } >> logv9.txt
           done
           for F in $FUNCTIONS; do
             {
@@ -111,7 +111,7 @@ jobs:
                 on && (/^\t\/\/ / || /^loc_/) { l = $0; sub(/^\t\/\/ /, "", l); print l }
                 $0 ~ "^X86_WEAK_FUNC\\(" name "," { on = 0 }
               ' generated/game/x86_recomp.*.cpp
-            } >> out.txt
+            } >> logv9.txt
           done
           for G in $GLOBALS; do
             {
@@ -121,7 +121,7 @@ jobs:
                 /^X86_FUNC\(__imp__/ { fn = $0; sub(/^X86_FUNC\(__imp__/, "", fn); sub(/\).*/, "", fn) }
                 /^\t\/\/ / && index($0, "0x" g) { l = $0; sub(/^\t\/\/ /, "", l); print fn " | " l }
               ' generated/game/x86_recomp.*.cpp
-            } >> out.txt
+            } >> logv9.txt
           done
           for SET in "$BOTH" "$BOTH2" "$BOTH3"; do
             [ -z "$SET" ] && continue
@@ -144,12 +144,12 @@ jobs:
                 }
                 END { flush() }
               ' generated/game/x86_recomp.*.cpp
-            } >> out.txt
+            } >> logv9.txt
           done
-          wc -l out.txt
-          head -c 60000 out.txt
+          wc -l logv9.txt
+          head -c 60000 logv9.txt
 
       - uses: actions/upload-artifact@v5
         with:
-          name: callers-v8
-          path: out.txt
+          name: callers-v9
+          path: logv9.txt
