@@ -6,6 +6,7 @@
 #include <fstream>
 #include <map>
 #include <sstream>
+#include <sys/stat.h>
 #include <vector>
 #include <thread>
 
@@ -24,6 +25,7 @@ using namespace layout;
 namespace d3d {
 void ViewScale(float xy);
 void GunDraw(bool on, const float move[4]);
+void GunScale(float& sx, float& sy);  // d3d8.cpp: the projection's scale the gun was last drawn with
 }
 
 namespace game {
@@ -172,6 +174,10 @@ constexpr uint32_t kWeaponData = 0xEC;
 constexpr uint32_t kWeaponOwner = 0xF0;
 constexpr uint32_t kDataAimZoom = 0xB4;
 // player
+// the view's axes: right, up, forward and eye look like the rows of one matrix at 0xD0 (forward and eye are known,
+// right and up are read from the rows before them and checked at run time)
+constexpr uint32_t kPlayerRight = 0xD0;
+constexpr uint32_t kPlayerUp = 0xE0;
 constexpr uint32_t kPlayerForward = 0xF0;
 constexpr uint32_t kPlayerEye = 0x100;
 constexpr uint32_t kPlayerWeapon = 0x29C;
@@ -200,13 +206,17 @@ static float g_gun = 1.0f;  // the gun's picture over the view's
 // The gun at the aim: in the middle of the view, moved from where the game holds it.
 // ads_move.txt in SaveData, lines "TYPE dx dy fx fy" (ALL for any type not named): dx right and dy up in view units,
 // what is near moving more; fx and fy right and up on the screen, everything moving alike (fx and fy may be left out).
-// E.g. "ALL -0.07 0.03 -0.11 0", "RPG 0 0". No file, no move
+// A fifth number is how far what sits on the gun (muzzle flash, shells, muzzle smoke, the start of tracers) follows
+// the move: 1 all the way (left out: 1), 0 not at all, -1 the other way.
+// E.g. "ALL -0.07 0.03 -0.11 0 1", "RPG 0 0". No file, no move
 struct AdsMove {
-    float v[4] = {};
+    float v[5] = {0, 0, 0, 0, 1};
 };
 static std::map<std::string, AdsMove> g_ads_shifts;
-static bool g_ads_loaded = false;
+static time_t g_ads_stamp = -1;  // the file's change time when it was read
+static std::chrono::steady_clock::time_point g_ads_checked;
 static float g_shift[4] = {};  // the move this frame
+static float g_effect = 0;     // how far the effects on the gun follow it this frame
 
 static void LoadAdsShifts(uint32_t data, const char* type) {
     g_ads_shifts.clear();
@@ -217,7 +227,10 @@ static void LoadAdsShifts(uint32_t data, const char* type) {
         std::string name;
         AdsMove m;
         if (!(in >> name >> m.v[0] >> m.v[1])) continue;
-        if (in >> m.v[2]) in >> m.v[3];
+        if (in >> m.v[2]) {
+            in >> m.v[3];
+            in >> m.v[4];
+        }
         g_ads_shifts[name] = m;
     }
     if (FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/ads_test.log", "a")) {
@@ -226,23 +239,35 @@ static void LoadAdsShifts(uint32_t data, const char* type) {
     }
 }
 
+// The file is looked at twice a second while aiming: saved again, it is read again, no new level needed
 static void AdsShift(uint32_t data, float hip) {
     float blend = 1 - hip;
     for (float& v : g_shift) v = 0;
-    if (!data || blend <= 0) {
-        g_ads_loaded = false;
-        return;
-    }
+    g_effect = 0;
+    if (!data || blend <= 0) return;
     char type[4] = {};
     std::memcpy(type, HostPtr(data + 0x130), 3);  // the type code, "ASR", "SMG", "PST"...
-    if (!g_ads_loaded) {
-        g_ads_loaded = true;
-        LoadAdsShifts(data, type);
+    auto now = std::chrono::steady_clock::now();
+    if (g_ads_stamp == -1 || now - g_ads_checked > std::chrono::milliseconds(500)) {
+        g_ads_checked = now;
+        struct stat st;
+        time_t stamp = stat("/storage/emulated/0/Black/SaveData/ads_move.txt", &st) == 0 ? st.st_mtime : 0;
+        if (stamp != g_ads_stamp) {
+            g_ads_stamp = stamp;
+            LoadAdsShifts(data, type);
+        }
     }
     auto it = g_ads_shifts.find(type);
     if (it == g_ads_shifts.end()) it = g_ads_shifts.find("ALL");
-    if (it != g_ads_shifts.end())
+    if (it != g_ads_shifts.end()) {
         for (int i = 0; i < 4; i++) g_shift[i] = it->second.v[i] * blend;
+        g_effect = it->second.v[4];
+    }
+}
+
+// Is the gun's picture anywhere but where the game puts it: grown by the viewmodel setting or moved by the aim
+static bool GunMoved() {
+    return g_gun != 1 || (g_effect != 0 && (g_shift[0] || g_shift[1] || g_shift[2] || g_shift[3]));
 }
 
 // The view of play, 70 over the zoom: the setting from the hip, the game's own once the aim is in.
@@ -272,6 +297,38 @@ X86_FUNC(sub_00176F60) {
     if (gun) d3d::ViewScale(1);
 }
 
+// What sits on the gun follows the aim's move too. depth is the point's distance ahead of the eye. The gun's own draws
+// are moved in the shader by dx and dy in view units (the same at any depth) and by fx and fy of the screen
+// (-1..1 across, so a point at depth d moves fx * d / scale in view units, the scale being the projection's the gun
+// was drawn with). Here the same move is made in the world, along the view's right and up.
+static void AdsOffset(float* v, float depth) {
+    if (!g_effect || (!g_shift[0] && !g_shift[1] && !g_shift[2] && !g_shift[3])) return;
+    const float* right = &G<float>(Player() + kPlayerRight);
+    const float* up = &G<float>(Player() + kPlayerUp);
+    const float* forward = &G<float>(Player() + kPlayerForward);
+    auto dot = [](const float* a, const float* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; };
+    // the rows are read as the view's axes only if they are: unit, and square to each other and to forward
+    bool axes = std::fabs(dot(right, right) - 1) < 0.02f && std::fabs(dot(up, up) - 1) < 0.02f &&
+                std::fabs(dot(right, forward)) < 0.02f && std::fabs(dot(up, forward)) < 0.02f &&
+                std::fabs(dot(right, up)) < 0.02f;
+    static bool logged = false;
+    if (!logged) {
+        logged = true;
+        if (FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/ads_test.log", "a")) {
+            std::fprintf(log, "effects: axes %s right=(%.3f %.3f %.3f) up=(%.3f %.3f %.3f) forward=(%.3f %.3f %.3f)\n",
+                         axes ? "ok" : "NOT a view's, effects stay", right[0], right[1], right[2], up[0], up[1], up[2],
+                         forward[0], forward[1], forward[2]);
+            std::fclose(log);
+        }
+    }
+    if (!axes) return;
+    float sx = 0, sy = 0;
+    d3d::GunScale(sx, sy);
+    float dx = g_shift[0] + (sx > 0 ? g_shift[2] * depth / sx : 0);
+    float dy = g_shift[1] + (sy > 0 ? g_shift[3] * depth / sy : 0);
+    for (int i = 0; i < 3; i++) v[i] += g_effect * (dx * right[i] + dy * up[i]);
+}
+
 // What sits on the gun follows its picture: across the player's view a point or an axis grows by the same share,
 // its depth stays
 static void OnGun(uint32_t at, bool point) {
@@ -285,13 +342,14 @@ static void OnGun(uint32_t at, bool point) {
         depth += d[i] * forward[i];
     }
     for (int i = 0; i < 3; i++) v[i] += (g_gun - 1) * (d[i] - forward[i] * depth);
+    if (point) AdsOffset(v, depth);
 }
 
 constexpr uint32_t kMatrixPosition = 48;  // the last of a matrix's four rows
 
 // A locator's matrix moved onto the gun's picture, as a copy: the game's own stays where bullets start
 static uint32_t Follow(uint32_t matrix, uint32_t owner, bool axes) {
-    if (g_gun == 1 || matrix == 0x5655C0 || owner != Player()) return matrix;
+    if (!GunMoved() || matrix == 0x5655C0 || owner != Player()) return matrix;
     static uint32_t copy = mem::AllocSystem(64, 16);
     std::memcpy(HostPtr(copy), HostPtr(matrix), 64);
     for (uint32_t row = axes ? 0 : kMatrixPosition; row < 64; row += 16) OnGun(copy + row, row == kMatrixPosition);
@@ -315,7 +373,7 @@ constexpr uint32_t kShotWeapon = 4;
 void TracerStart(X86Context& ctx, uint8_t*) {
     uint32_t shot = R32(ctx.esi + kBulletShot);
     uint32_t weapon = shot ? R32(shot + kShotWeapon) : 0;
-    if (g_gun == 1 || !weapon || R32(weapon + kWeaponOwner) != Player()) return;
+    if (!GunMoved() || !weapon || R32(weapon + kWeaponOwner) != Player()) return;
     static uint32_t copy = mem::AllocSystem(16, 16);
     std::memcpy(HostPtr(copy), HostPtr(ctx.eax), 16);
     ctx.eax = copy;
@@ -331,7 +389,7 @@ X86_FUNC(sub_001D2860) {
     uint32_t from = R32(ctx.esp);
     uint32_t out = R32(ctx.esp + 4);
     __imp__sub_001D2860(ctx, base);
-    if (g_gun != 1 && (from == kFromTracerA || from == kFromTracerB)) OnGun(out + kMatrixPosition, true);
+    if (GunMoved() && (from == kFromTracerA || from == kFromTracerB)) OnGun(out + kMatrixPosition, true);
 }
 
 // Recoil dies away by a factor a frame. ebx the player: the kick a shot leaves (0x1EFE58) is spent here before
