@@ -204,6 +204,8 @@ float ZScale(const gpu::Surface& zs) {
 }
 
 float g_view_scale = 1.0f;
+float g_view_shift_x = 0.0f;  // of the viewport's width, right
+float g_view_shift_y = 0.0f;  // of its height, down
 
 // c-38 and c-37 hold the viewport scale and offset, as D3D_GetViewportOffsetAndScale computes them
 constexpr uint32_t kViewportScale = 58;
@@ -215,8 +217,8 @@ void UpdateViewportConstants() {
     float hw = v.w * 0.5f;
     float hh = v.h * 0.5f;
     g_state.vsc[kViewportScale] = {hw * g_view_scale, -hh * g_view_scale, (v.max_z - v.min_z) * g_state.zscale, 0};
-    float x = v.x + g_state.ss_offset_x + hw;
-    float y = v.y + g_state.ss_offset_y + hh;
+    float x = v.x + g_state.ss_offset_x + hw + g_view_shift_x * v.w;
+    float y = v.y + g_state.ss_offset_y + hh + g_view_shift_y * v.h;
     g_state.vsc[kViewportOffset] = {x, y, v.min_z * g_state.zscale, 0};
 }
 
@@ -244,6 +246,14 @@ std::recursive_mutex& Lock() { return g_lock; }
 void ViewScale(float xy) {
     std::lock_guard<std::recursive_mutex> lock(g_lock);
     g_view_scale = xy;
+    UpdateViewportConstants();
+}
+
+// draws move by a share of the viewport's size (x right, y down), depth stays
+void ViewShift(float x, float y) {
+    std::lock_guard<std::recursive_mutex> lock(g_lock);
+    g_view_shift_x = x;
+    g_view_shift_y = y;
     UpdateViewportConstants();
 }
 
