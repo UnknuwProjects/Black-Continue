@@ -996,11 +996,12 @@ void DrawWeapons() {
     if (ImGui::Button(Ui("FILL AMMUNITION").c_str(), ImVec2(w, 0))) weapons::FillAmmo();
     ImGui::SameLine();
     if (ImGui::Button(Ui("FILL MEDKITS").c_str(), ImVec2(w, 0))) weapons::FillMedkits();
+    Section("CHECKPOINT");
+    if (ImGui::Button(Ui("LOAD CHECKPOINT").c_str(), ImVec2(w, 0))) weapons::ContinueCheckpoint();
     if (!v.status.empty()) {
-        ImGui::SameLine();
+        ImGui::Dummy(ImVec2(0, ImGui::GetFontSize() * 0.2f));
         ImGui::PushStyleColor(ImGuiCol_Text, kDim);
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted(v.status.c_str());
+        ImGui::TextWrapped("%s", v.status.c_str());
         ImGui::PopStyleColor();
     }
 }
