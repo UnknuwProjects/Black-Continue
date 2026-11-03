@@ -5,6 +5,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <map>
 #include <unordered_map>
 #include <unordered_set>
@@ -250,6 +251,28 @@ struct GunRows {
     float x[4], y[4];
 };
 
+float g_gun_scale[2] = {};  // the projection's scale of the x and y rows the gun was last drawn with
+float g_gun_ndc[2] = {};    // how far the draws the move reached went, as the screen's -1..1 (right, up)
+bool g_gun_ndc_valid = false;
+
+// What the gun list draws that the move does not reach, once for each vertex shader: gun_draw.log in SaveData.
+// A draw is left out when c13 is not the projection's w row; arms and other skinned meshes may keep theirs elsewhere
+void LogGunDraw(const char* what, float depth) {
+    static std::unordered_set<uint32_t> seen;
+    uint32_t key = g_state.vs_handle ^ (what[0] == 'm' ? 0x80000000u : 0);
+    if (seen.size() >= 96 || !seen.insert(key).second) return;
+    FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/gun_draw.log", "a");
+    if (!log) return;
+    std::fprintf(log, "gun draw %s: vs=%08X stride=%u c13len=%.3f", what, unsigned(g_state.vs_handle),
+                 unsigned(g_state.vs ? g_state.vs->stream_stride[0] : 0), depth);
+    for (int r = 0; r < 16; r++) {
+        const auto& c = g_state.vsc[r];
+        std::fprintf(log, " c%d=(%.2f %.2f %.2f %.2f)", r, c[0], c[1], c[2], c[3]);
+    }
+    std::fprintf(log, "\n");
+    std::fclose(log);
+}
+
 bool GunPush(GunRows& saved) {
     const float* m = g_gun_move;
     if (!g_gun_draw || (!m[0] && !m[1] && !m[2] && !m[3])) return false;
@@ -257,11 +280,34 @@ bool GunPush(GunRows& saved) {
     auto& y = g_state.vsc[11];
     const auto& w = g_state.vsc[13];
     float depth = std::hypot(w[0], w[1], w[2]);
-    if (depth < 0.9f || depth > 1.1f) return false;  // not the projection's rows
+    if (depth < 0.9f || depth > 1.1f) {  // not the projection's rows
+        LogGunDraw("left out, moved on the screen", depth);
+        return false;
+    }
     std::memcpy(saved.x, x.data(), 16);
     std::memcpy(saved.y, y.data(), 16);
     float sx = std::hypot(x[0], x[1], x[2]);
     float sy = std::hypot(y[0], y[1], y[2]);
+    g_gun_scale[0] = sx;
+    g_gun_scale[1] = sy;
+    // the move on the screen: the view step over the depth of the model's origin, and the share of the screen
+    if (w[3] > 0.05f) {
+        g_gun_ndc[0] = std::clamp(sx * m[0] / w[3] + m[2], -1.0f, 1.0f);
+        g_gun_ndc[1] = std::clamp(sy * m[1] / w[3] + m[3], -1.0f, 1.0f);
+        g_gun_ndc_valid = true;
+        static int logged = 0;
+        static float last[2] = {1e9f, 1e9f};
+        if (logged < 40 && (std::fabs(last[0] - g_gun_ndc[0]) > 0.002f || std::fabs(last[1] - g_gun_ndc[1]) > 0.002f)) {
+            last[0] = g_gun_ndc[0];
+            last[1] = g_gun_ndc[1];
+            if (FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/gun_draw.log", "a")) {
+                std::fprintf(log, "gun move on screen: right=%.3f up=%.3f (1 is half the screen)\n", g_gun_ndc[0], g_gun_ndc[1]);
+                std::fclose(log);
+                logged++;
+            }
+        }
+    }
+    LogGunDraw("moved", depth);
     x[3] += sx * m[0];
     y[3] += sy * m[1];
     for (int i = 0; i < 4; i++) {
@@ -276,6 +322,29 @@ void GunPop(const GunRows& saved) {
     std::memcpy(g_state.vsc[11].data(), saved.y, 16);
 }
 
+// The gun list's draws the rows above do not reach (arms, skinned meshes) are moved on the screen instead, by what
+// the draws that were reached went: every shader ends in the viewport's scale and offset
+struct ViewSaved {
+    float x, y;
+};
+
+bool GunViewPush(ViewSaved& saved) {
+    const float* m = g_gun_move;
+    if (!g_gun_draw || !g_gun_ndc_valid || (!m[0] && !m[1] && !m[2] && !m[3])) return false;
+    saved = {g_view_shift_x, g_view_shift_y};
+    // the screen's -1..1 is half the viewport's size, and the gun list's view scale is in the constants already
+    g_view_shift_x = saved.x + g_gun_ndc[0] * 0.5f * g_view_scale;
+    g_view_shift_y = saved.y - g_gun_ndc[1] * 0.5f * g_view_scale;
+    UpdateViewportConstants();
+    return true;
+}
+
+void GunViewPop(const ViewSaved& saved) {
+    g_view_shift_x = saved.x;
+    g_view_shift_y = saved.y;
+    UpdateViewportConstants();
+}
+
 }  // namespace
 
 gpu::State& State() { return g_state; }
@@ -286,6 +355,12 @@ void GunDraw(bool on, const float move[4]) {
     for (int i = 0; i < 4; i++) g_gun_move[i] = on ? move[i] : 0;
 }
 std::recursive_mutex& Lock() { return g_lock; }
+
+void GunScale(float& sx, float& sy) {
+    std::lock_guard<std::recursive_mutex> lock(g_lock);
+    sx = g_gun_scale[0];
+    sy = g_gun_scale[1];
+}
 
 // draws grow about the viewport's centre, depth stays
 void ViewScale(float xy) {
@@ -1072,9 +1147,12 @@ HLE_STDCALL(D3DDevice_DrawVertices, 3) {
     std::lock_guard<std::recursive_mutex> lock(g_lock);
     SyncDeferred();
     GunRows saved;
+    ViewSaved view;
     bool moved = GunPush(saved);
+    bool screen = !moved && GunViewPush(view);
     if (g_backend) g_backend->Draw(g_state, a[0], a[1], a[2], nullptr);
     if (moved) GunPop(saved);
+    if (screen) GunViewPop(view);
     return 0;
 }
 
@@ -1083,9 +1161,12 @@ HLE_STDCALL(D3DDevice_DrawIndexedVertices, 3) {
     SyncDeferred();
     const uint8_t* indices = a[2] ? static_cast<const uint8_t*>(HostPtr(a[2])) : nullptr;
     GunRows saved;
+    ViewSaved view;
     bool moved = GunPush(saved);
+    bool screen = !moved && GunViewPush(view);
     if (g_backend) g_backend->Draw(g_state, a[0], 0, a[1], indices);
     if (moved) GunPop(saved);
+    if (screen) GunViewPop(view);
     return 0;
 }
 
