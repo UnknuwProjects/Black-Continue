@@ -77,7 +77,12 @@ constexpr uint32_t kWorldSectionCount = 0x934;
 constexpr uint32_t kWorldLevelIds = 0x5AEC;  // two bytes: the mission and the level
 constexpr uint32_t kCpMagic = 0x32504342;    // "BCP2"
 constexpr uint32_t kModeDifficulty = 0x2014C;  // in the mode manager: the difficulty (the snapshot picks a value by it)
-const char* const kCpFile = "/storage/emulated/0/Black/SaveData/checkpoint.sav";
+// one file per level and difficulty
+std::string CpFile(uint32_t ids, uint32_t difficulty) {
+    char name[160];
+    std::snprintf(name, sizeof name, "/storage/emulated/0/Black/SaveData/checkpoint_%04X_d%u.sav", unsigned(ids), unsigned(difficulty));
+    return name;
+}
 // player
 constexpr uint32_t kPlayerKind = 0xC4;
 constexpr uint32_t kKindPlayer = 2;
@@ -682,20 +687,25 @@ void SaveCheckpointFile(uint32_t s) {
     PutBytes(d, s, kCpStructSize);
     PutBytes(d, buf1, count * kCpEntry);
     PutBytes(d, buf2, size2);
-    std::string tmp = std::string(kCpFile) + ".tmp";
+    std::string file = CpFile(LevelIds(world), difficulty);
+    std::string tmp = file + ".tmp";
     {
         std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
         f.write(reinterpret_cast<const char*>(d.data()), std::streamsize(d.size()));
         if (!f) return DiagLog("weapons: checkpoint file not written");
     }
-    std::rename(tmp.c_str(), kCpFile);
+    std::rename(tmp.c_str(), file.c_str());
     DiagLog("weapons: checkpoint kept (section %d, difficulty %u, %u bytes)", int(R32(kCpSection)), unsigned(difficulty),
             unsigned(d.size()));
 }
 
 // the kept checkpoint back into the game's memory, when this level is the one it was taken in; "" when done
 std::string LoadCheckpointFile() {
-    std::ifstream f(kCpFile, std::ios::binary);
+    uint32_t world = R32(kWorld);
+    uint32_t manager = R32(kWeaponManager), table = manager ? R32(manager) : 0;
+    if (!world || !table) return "Only during a level";
+    uint32_t mode = manager_mode(), difficulty = mode ? R32(mode + kModeDifficulty) : 0;
+    std::ifstream f(CpFile(LevelIds(world), difficulty), std::ios::binary);
     if (!f) return "No checkpoint yet";
     std::vector<uint8_t> d((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     Reader r{d};
@@ -708,12 +718,8 @@ std::string LoadCheckpointFile() {
     const uint8_t* buf1_data = r.ok && count <= 4096 ? r.Bytes(count * kCpEntry) : nullptr;
     const uint8_t* buf2_data = r.ok && size2 <= 256 ? r.Bytes(size2) : nullptr;
     if (!r.ok || !buf1_data || !buf2_data || s_offset >= 0x10000) return "Checkpoint file is invalid";
-    uint32_t world = R32(kWorld);
-    uint32_t manager = R32(kWeaponManager), table = manager ? R32(manager) : 0;
-    if (!world || !table) return "Only during a level";
     if (LevelIds(world) != ids || R32(world + kWorldSectionCount) != count || G<uint8_t>(table + kTableCount) != size2)
         return "Checkpoint is from another level";
-    uint32_t mode = manager_mode(), difficulty = mode ? R32(mode + kModeDifficulty) : 0;
     if (difficulty != saved_difficulty) {
         DiagLog("weapons: checkpoint difficulty %u, this run %u", unsigned(saved_difficulty), unsigned(difficulty));
         return "Checkpoint is from another difficulty";
