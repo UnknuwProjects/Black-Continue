@@ -7,10 +7,10 @@ on:
     inputs:
       targets:
         description: "Functions whose call sites to list, space separated"
-        default: "sub_0020DCA0 sub_0020DBC0 sub_0020A100"
+        default: "sub_00129A90 sub_001240D0"
       functions:
         description: "Functions whose whole body to print, space separated"
-        default: "sub_0020DCA0 sub_0020DBC0"
+        default: "sub_00129A90 sub_001240D0"
       globals:
         description: "Data addresses (8 hex digits) whose users to list, space separated"
         default: ""
@@ -86,7 +86,7 @@ jobs:
           BOTH3: ${{ inputs.both3 }}
         run: |
           set +e +o pipefail
-          echo "VERSION 12: bodies, callers, globals, pattern sets" > logv12.txt
+          echo "VERSION 13: bodies, callers, globals, pattern sets" > logv13.txt
           for T in $TARGETS; do
             {
               echo
@@ -100,7 +100,7 @@ jobs:
                   f = FILENAME; sub(/.*x86_recomp\./, "", f)
                   print f ":" FNR " " fn " |" s
                 }' generated/game/x86_recomp.*.cpp
-            } >> logv12.txt
+            } >> logv13.txt
           done
           for F in $FUNCTIONS; do
             {
@@ -111,7 +111,7 @@ jobs:
                 on && (/^\t\/\/ / || /^loc_/) { l = $0; sub(/^\t\/\/ /, "", l); print l }
                 $0 ~ "^X86_WEAK_FUNC\\(" name "," { on = 0 }
               ' generated/game/x86_recomp.*.cpp
-            } >> logv12.txt
+            } >> logv13.txt
           done
           for G in $GLOBALS; do
             {
@@ -121,7 +121,7 @@ jobs:
                 /^X86_FUNC\(__imp__/ { fn = $0; sub(/^X86_FUNC\(__imp__/, "", fn); sub(/\).*/, "", fn) }
                 /^\t\/\/ / && index($0, "0x" g) { l = $0; sub(/^\t\/\/ /, "", l); print fn " | " l }
               ' generated/game/x86_recomp.*.cpp
-            } >> logv12.txt
+            } >> logv13.txt
           done
           for SET in "$BOTH" "$BOTH2" "$BOTH3"; do
             [ -z "$SET" ] && continue
@@ -144,12 +144,12 @@ jobs:
                 }
                 END { flush() }
               ' generated/game/x86_recomp.*.cpp
-            } >> logv12.txt
+            } >> logv13.txt
           done
-          wc -l logv12.txt
-          head -c 60000 logv12.txt
+          wc -l logv13.txt
+          head -c 60000 logv13.txt
 
       - uses: actions/upload-artifact@v5
         with:
-          name: callers-v12
-          path: logv12.txt
+          name: callers-v13
+          path: logv13.txt
