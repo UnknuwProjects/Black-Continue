@@ -134,13 +134,6 @@ void Prompts(uint32_t clip, bool keyboard, int depth) {
 X86_EXTERN_FUNC(__imp__sub_001F3A80);
 X86_FUNC(sub_001F3A80) {
     uint32_t id = R32(ctx.esp + 4);
-    if (R32(ctx.esp) == 0x12B421) {  // HUD message (0x12B3C0): every one is logged, "checkpoint tercapai" is C9ABBCB2
-        if (FILE* f = std::fopen("/storage/emulated/0/Black/SaveData/checkpoint.log", "a")) {
-            std::fprintf(f, "hud id=%08X msg=%u caller=%08X\n", unsigned(id), unsigned(ctx.esi),
-                         unsigned(R32(ctx.ebp + 4)));
-            std::fclose(f);
-        }
-    }
     __imp__sub_001F3A80(ctx, base);
     if (uint32_t text = game::OptionsText(id)) {
         ctx.eax = text;
@@ -210,40 +203,3 @@ void MenuPrompts(X86Context& ctx, uint8_t*) {
         W32(kPickupGlyphs + i * 4, key.empty() ? glyphs[i] : keys + i * kKeySize);
     }
 }
-
-// jejak checkpoint: pemanggilan penting dicatat ke checkpoint.log
-static void TraceLog(const char* name, X86Context& ctx, int state) {
-    if (FILE* f = std::fopen("/storage/emulated/0/Black/SaveData/checkpoint.log", "a")) {
-        std::fprintf(f, "%s ret=%08X ecx=%08X eax=%08X state=%d flag=%u\n", name,
-                     unsigned(R32(ctx.esp)), unsigned(ctx.ecx), unsigned(ctx.eax), state,
-                     unsigned(R32(0x2F3BF8) & 0xFF));
-        std::fclose(f);
-    }
-}
-
-// mesin state: dicatat hanya saat objek atau state berubah
-#define TRACE_STATE_FUNC(addr, label)                                        \
-    X86_EXTERN_FUNC(__imp__##addr);                                          \
-    X86_FUNC(addr) {                                                         \
-        static uint32_t obj = 0, st = ~0u;                                   \
-        uint32_t s = R32(ctx.ecx + 4);                                       \
-        if (ctx.ecx != obj || s != st) {                                     \
-            obj = ctx.ecx; st = s;                                           \
-            TraceLog(label, ctx, int(s));                                    \
-        }                                                                    \
-        __imp__##addr(ctx, base);                                            \
-    }
-
-// fungsi biasa: dicatat tiap panggilan
-#define TRACE_FUNC(addr, label)                                              \
-    X86_EXTERN_FUNC(__imp__##addr);                                          \
-    X86_FUNC(addr) {                                                         \
-        TraceLog(label, ctx, -1);                                            \
-        __imp__##addr(ctx, base);                                            \
-    }
-
-TRACE_STATE_FUNC(sub_0020CE00, "LOAD")
-TRACE_STATE_FUNC(sub_0020CD50, "UNLOAD")
-TRACE_FUNC(sub_001B79D0, "RESTORE2")
-TRACE_FUNC(sub_001BEF10, "RESTORE1")
-TRACE_FUNC(sub_001293C0, "RESET")
