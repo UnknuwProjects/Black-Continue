@@ -228,7 +228,7 @@ static void AdsShift(uint32_t data, float hip) {
         return;
     }
     char type[4] = {};
-    std::memcpy(type, HostPtr(data + 0x128), 3);
+    std::memcpy(type, HostPtr(data + 0x130), 3);  // the type code, "ASR", "SMG", "PST"...
     if (!g_ads_loaded) {
         g_ads_loaded = true;
         LoadAdsShifts(data, type);
