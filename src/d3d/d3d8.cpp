@@ -4,7 +4,6 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
-#include <cstdio>
 #include <map>
 #include <unordered_map>
 #include <unordered_set>
@@ -239,41 +238,42 @@ void ApplyDefaultStates(X86Context& ctx) {
 #endif
 }
 
-// TEMPORARY: what the gun's draws are given, to gun_vsc.log (to find its matrix): ten draws at the hip, ten at the aim
+// The gun's draws moved in the view, not on the screen: its program takes the position through the matrix in c10..c13
+// (x, y, z, w rows; each ends in the term added to the clip position). A step along the view's right or up moves the
+// clip position by the row's scale times it, so what is near moves more than what is far, as a gun held in the middle
 bool g_gun_draw = false;
-int g_gun_logged[2] = {};
-std::unordered_set<const void*> g_gun_programs;
+float g_gun_dx = 0.0f;  // right, in view units
+float g_gun_dy = 0.0f;  // up
 
-void GunLog() {
-    if (!g_gun_draw) return;
-    bool aim = std::fabs(g_view_shift_x) > 0.14f;
-    bool hip = g_view_shift_x == 0 && g_view_shift_y == 0;
-    if (!aim && !hip) return;
-    int& n = g_gun_logged[aim ? 1 : 0];
-    if (n >= 10) return;
-    n++;
-    FILE* f = std::fopen("/storage/emulated/0/Black/SaveData/gun_vsc.log", "a");
-    if (!f) return;
-    std::fprintf(f, "== %s draw %d, vs_handle=%08X scale=%f shift=%f,%f\n", aim ? "AIM" : "HIP", n, unsigned(g_state.vs_handle),
-                 g_view_scale, g_view_shift_x, g_view_shift_y);
-    for (int r = 0; r < 64; r++) {
-        const auto& c = g_state.vsc[r];
-        std::fprintf(f, "c%d: %f %f %f %f\n", r, c[0], c[1], c[2], c[3]);
-    }
-    if (g_state.vs && g_gun_programs.insert(&*g_state.vs).second) {
-        std::fprintf(f, "program (%u words):", unsigned(g_state.vs->program.size()));
-        for (size_t i = 0; i < g_state.vs->program.size() && i < 400; i++)
-            std::fprintf(f, "%s%08X", i % 4 ? " " : "\n", unsigned(g_state.vs->program[i]));
-        std::fputc('\n', f);
-    }
-    std::fclose(f);
+bool GunPush(float saved[2]) {
+    if (!g_gun_draw || (g_gun_dx == 0 && g_gun_dy == 0)) return false;
+    auto& x = g_state.vsc[10];
+    auto& y = g_state.vsc[11];
+    const auto& w = g_state.vsc[13];
+    float depth = std::hypot(w[0], w[1], w[2]);
+    if (depth < 0.9f || depth > 1.1f) return false;  // not the projection's rows
+    saved[0] = x[3];
+    saved[1] = y[3];
+    x[3] += std::hypot(x[0], x[1], x[2]) * g_gun_dx;
+    y[3] += std::hypot(y[0], y[1], y[2]) * g_gun_dy;
+    return true;
+}
+
+void GunPop(const float saved[2]) {
+    g_state.vsc[10][3] = saved[0];
+    g_state.vsc[11][3] = saved[1];
 }
 
 }  // namespace
 
 gpu::State& State() { return g_state; }
 
-void GunDraw(bool on) { g_gun_draw = on; }
+void GunDraw(bool on, float dx, float dy) {
+    std::lock_guard<std::recursive_mutex> lock(g_lock);
+    g_gun_draw = on;
+    g_gun_dx = dx;
+    g_gun_dy = dy;
+}
 std::recursive_mutex& Lock() { return g_lock; }
 
 // draws grow about the viewport's centre, depth stays
@@ -1060,17 +1060,21 @@ HLE_STDCALL(D3DDevice_SetPixelShaderConstant, 3) {
 HLE_STDCALL(D3DDevice_DrawVertices, 3) {
     std::lock_guard<std::recursive_mutex> lock(g_lock);
     SyncDeferred();
-    GunLog();
+    float saved[2];
+    bool moved = GunPush(saved);
     if (g_backend) g_backend->Draw(g_state, a[0], a[1], a[2], nullptr);
+    if (moved) GunPop(saved);
     return 0;
 }
 
 HLE_STDCALL(D3DDevice_DrawIndexedVertices, 3) {
     std::lock_guard<std::recursive_mutex> lock(g_lock);
     SyncDeferred();
-    GunLog();
     const uint8_t* indices = a[2] ? static_cast<const uint8_t*>(HostPtr(a[2])) : nullptr;
+    float saved[2];
+    bool moved = GunPush(saved);
     if (g_backend) g_backend->Draw(g_state, a[0], 0, a[1], indices);
+    if (moved) GunPop(saved);
     return 0;
 }
 
