@@ -23,7 +23,7 @@ using namespace layout;
 
 namespace d3d {
 void ViewScale(float xy);
-void GunDraw(bool on, float dx, float dy);
+void GunDraw(bool on, const float move[4]);
 }
 
 namespace game {
@@ -197,12 +197,16 @@ static float Widen(uint32_t degrees) {
 
 static float g_gun = 1.0f;  // the gun's picture over the view's
 
-// The gun at the aim: in the middle of the view, moved in it by a step of view units from where the game holds it.
-// ads_move.txt in SaveData, lines "TYPE x y" (x right and y up; ALL for any type not named, e.g. "ALL -0.11 0.03",
-// "RPG 0 0"). No file, no move
-static std::map<std::string, std::pair<float, float>> g_ads_shifts;
+// The gun at the aim: in the middle of the view, moved from where the game holds it.
+// ads_move.txt in SaveData, lines "TYPE dx dy fx fy" (ALL for any type not named): dx right and dy up in view units,
+// what is near moving more; fx and fy right and up on the screen, everything moving alike (fx and fy may be left out).
+// E.g. "ALL -0.07 0.03 -0.11 0", "RPG 0 0". No file, no move
+struct AdsMove {
+    float v[4] = {};
+};
+static std::map<std::string, AdsMove> g_ads_shifts;
 static bool g_ads_loaded = false;
-static float g_shift_x = 0, g_shift_y = 0;  // the move this frame
+static float g_shift[4] = {};  // the move this frame
 
 static void LoadAdsShifts(uint32_t data, const char* type) {
     g_ads_shifts.clear();
@@ -211,8 +215,10 @@ static void LoadAdsShifts(uint32_t data, const char* type) {
     while (std::getline(f, line)) {
         std::istringstream in(line);
         std::string name;
-        float x = 0, y = 0;
-        if (in >> name >> x >> y) g_ads_shifts[name] = {x, y};
+        AdsMove m;
+        if (!(in >> name >> m.v[0] >> m.v[1])) continue;
+        if (in >> m.v[2]) in >> m.v[3];
+        g_ads_shifts[name] = m;
     }
     if (FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/ads_test.log", "a")) {
         std::fprintf(log, "aim in: data=%08X type=%s, %u lines\n", unsigned(data), type, unsigned(g_ads_shifts.size()));
@@ -222,9 +228,9 @@ static void LoadAdsShifts(uint32_t data, const char* type) {
 
 static void AdsShift(uint32_t data, float hip) {
     float blend = 1 - hip;
+    for (float& v : g_shift) v = 0;
     if (!data || blend <= 0) {
         g_ads_loaded = false;
-        g_shift_x = g_shift_y = 0;
         return;
     }
     char type[4] = {};
@@ -235,9 +241,8 @@ static void AdsShift(uint32_t data, float hip) {
     }
     auto it = g_ads_shifts.find(type);
     if (it == g_ads_shifts.end()) it = g_ads_shifts.find("ALL");
-    bool found = it != g_ads_shifts.end();
-    g_shift_x = found ? it->second.first * blend : 0;
-    g_shift_y = found ? it->second.second * blend : 0;
+    if (it != g_ads_shifts.end())
+        for (int i = 0; i < 4; i++) g_shift[i] = it->second.v[i] * blend;
 }
 
 // The view of play, 70 over the zoom: the setting from the hip, the game's own once the aim is in.
@@ -260,10 +265,10 @@ X86_FUNC(sub_00176F60) {
     if (ctx.esi == R32(kDisplay) + kDisplayDrawLists + kAlphaDrawList * kDrawListSize) game::EspCamera();
     bool list = ctx.esi == R32(kDisplay) + kDisplayDrawLists + kGunDrawList * kDrawListSize;
     bool gun = g_gun != 1 && list;
-    if (list) d3d::GunDraw(true, g_shift_x, g_shift_y);
+    if (list) d3d::GunDraw(true, g_shift);
     if (gun) d3d::ViewScale(g_gun);
     __imp__sub_00176F60(ctx, base);
-    if (list) d3d::GunDraw(false, 0, 0);
+    if (list) d3d::GunDraw(false, g_shift);
     if (gun) d3d::ViewScale(1);
 }
 
