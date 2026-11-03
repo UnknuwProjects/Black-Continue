@@ -61,6 +61,22 @@ void Save() {
     std::ofstream(File()) << t << "\n";
 }
 
+// Aiming in: the zoom is under the limit and not climbing back to 1, so gyro stops the moment the sights are let go
+bool AimActive() {
+    static float prev = 1.0f;
+    static bool releasing = false;
+    float z = game::g_zoom.load();
+    if (z >= kAimingZoom) {
+        releasing = false;
+    } else if (z > prev + 0.0005f) {
+        releasing = true;
+    } else if (z < prev - 0.0005f) {
+        releasing = false;
+    }
+    prev = z;
+    return z < kAimingZoom && !releasing;
+}
+
 SDL_SensorID FindGyro() {
     int n = 0;
     SDL_SensorID found = 0;
@@ -183,7 +199,7 @@ void Turn(float yaw, float pitch, uint64_t now, uint64_t& last) {
     if (dt <= 0 || dt > 0.1f) return;
     bool active = true;
     if (g_mode == kFiring) active = touch::Firing();
-    else if (g_mode == kAiming) active = game::g_zoom.load() < kAimingZoom;  // the game's own zoom scale, 1 off the sights
+    else if (g_mode == kAiming) active = AimActive();  // the game's own zoom scale, 1 off the sights
     if (!active || !touch::LookActive()) return;
     if (std::fabs(yaw) < kDeadZone) yaw = 0;
     if (std::fabs(pitch) < kDeadZone) pitch = 0;
