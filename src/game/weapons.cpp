@@ -54,6 +54,14 @@ constexpr uint32_t kFixGuns = 0xB5F20;        // eax a Guns.bin in memory: reloc
 constexpr uint32_t kWorldState = 0x5AE0;  // the level loader's step
 constexpr uint32_t kStatePlaying = 0x1C;
 constexpr uint32_t kWorldSilver = 0x5CB0;  // byte: the level loaded Guns_s.bin
+// mode manager (the mission's state machine): +0x21084 its step (0 running), +0x21070 the mode in use, which the
+// mission's is at +0x20F78
+constexpr uint32_t kModeManager = 0x2D45F0;
+constexpr uint32_t kModeStep = 0x21084;
+constexpr uint32_t kModeActive = 0x21070;
+constexpr uint32_t kModeMission = 0x20F78;
+constexpr uint32_t kCheckpointFlag = 0x2F3BF8;  // byte: a checkpoint is held
+constexpr uint32_t kContinueCheckpoint = 0x1240D0;  // no arguments: reloads the mission from the held checkpoint
 // player
 constexpr uint32_t kPlayerKind = 0xC4;
 constexpr uint32_t kKindPlayer = 2;
@@ -213,6 +221,7 @@ weapons::View g_view;
 std::atomic<int> g_give{-1};
 std::atomic<bool> g_fill{false};
 std::atomic<bool> g_medkits{false};
+std::atomic<bool> g_continue{false};
 
 void SetStatus(const std::string& text) {
     std::lock_guard<std::mutex> lock(g_lock);
@@ -595,6 +604,23 @@ void DoGive(X86Context& ctx, int code) {
     Refresh();
 }
 
+// the game's own retry from the last checkpoint; only with a checkpoint held and the mission running
+void DoContinue(X86Context& ctx) {
+    Level l;
+    if (!ReadLevel(l)) return SetStatus("Only during a level");
+    if (!G<uint8_t>(kCheckpointFlag)) return SetStatus("No checkpoint yet");
+    uint32_t mgr = R32(kModeManager);
+    if (!mgr || R32(mgr + kModeStep) != 0 || R32(mgr + kModeActive) != mgr + kModeMission) {
+        DiagLog("weapons: continue refused, manager=%08X step=%u active=%08X", unsigned(mgr),
+                unsigned(mgr ? R32(mgr + kModeStep) : 0), unsigned(mgr ? R32(mgr + kModeActive) : 0));
+        return SetStatus("Not ready");
+    }
+    X86Context saved = ctx;
+    CallGuest(ctx, kContinueCheckpoint, {});
+    ctx = saved;
+    SetStatus("Loading checkpoint");
+}
+
 void DoFill() {
     Level l;
     if (!ReadLevel(l)) return SetStatus("Only during a level");
@@ -665,6 +691,7 @@ void Give(int type) { g_give = type; }
 
 void FillAmmo() { g_fill = true; }
 void FillMedkits() { g_medkits = true; }
+void ContinueCheckpoint() { g_continue = true; }
 
 void SetAutoSuppressor(bool on) { g_auto_suppressor = on; }  // add its declaration to game/weapons.h
 
@@ -676,6 +703,7 @@ void WeaponsTick(X86Context& ctx) {
     if (int type = g_give.exchange(-1); type >= 0) DoGive(ctx, type);
     if (g_fill.exchange(false)) DoFill();
     if (g_medkits.exchange(false)) DoFillMedkits();
+    if (g_continue.exchange(false)) DoContinue(ctx);
     if (++tick % 10 == 0) Refresh();
     Heartbeat();
     Level l;
