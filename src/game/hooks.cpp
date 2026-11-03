@@ -2,6 +2,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <set>
 #include <thread>
 
 #include "app/app.h"
@@ -191,6 +193,23 @@ static float Widen(uint32_t degrees) {
 
 static float g_gun = 1.0f;  // the gun's picture over the view's
 
+// TEMPORARY: the data of each weapon the player aims in with, once, to ads_dump.log (to find the aim's offset)
+static void DumpAimData(uint32_t weapon, uint32_t data, float aim) {
+    static std::set<uint32_t> done;
+    static bool first = true;
+    if (!data || done.size() >= 16 || !done.insert(data).second) return;
+    if (FILE* f = std::fopen("/storage/emulated/0/Black/SaveData/ads_dump.log", first ? "w" : "a")) {
+        first = false;
+        std::fprintf(f, "weapon=%08X data=%08X aim=%f\n", unsigned(weapon), unsigned(data), aim);
+        for (uint32_t off = 0; off < 0x200; off += 32) {
+            std::fprintf(f, "+%03X:", unsigned(off));
+            for (uint32_t i = 0; i < 8; i++) std::fprintf(f, " %08X", unsigned(R32(data + off + i * 4)));
+            std::fputc('\n', f);
+        }
+        std::fclose(f);
+    }
+}
+
 // The view of play, 70 over the zoom: the setting from the hip, the game's own once the aim is in.
 // ecx the weapon, xmm0 its zoom. Scripted cameras write theirs after this
 void FieldOfView(X86Context& ctx, uint8_t*) {
@@ -198,6 +217,7 @@ void FieldOfView(X86Context& ctx, uint8_t*) {
     float aim = data ? G<float>(data + kDataAimZoom) : 1;
     float zoom = ctx.xmm[0].f[0];
     float hip = aim > 1 ? std::clamp((aim - zoom) / (aim - 1), 0.0f, 1.0f) : 1.0f;
+    if (aim > 1 && hip < 0.02f && R32(ctx.ecx + kWeaponOwner) == Player()) DumpAimData(ctx.ecx, data, aim);
     float view = 1 + (Widen(game::Opt().fov) - 1) * hip;
     g_gun = view / (1 + (Widen(game::Opt().viewmodel_fov) - 1) * hip);
     float& fov = ctx.xmm[1].f[0];
