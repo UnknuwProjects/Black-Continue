@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
+#include <cstdio>
 #include <map>
 #include <unordered_map>
 #include <unordered_set>
@@ -237,9 +239,41 @@ void ApplyDefaultStates(X86Context& ctx) {
 #endif
 }
 
+// TEMPORARY: what the gun's draws are given, to gun_vsc.log (to find its matrix): ten draws at the hip, ten at the aim
+bool g_gun_draw = false;
+int g_gun_logged[2] = {};
+std::unordered_set<const void*> g_gun_programs;
+
+void GunLog() {
+    if (!g_gun_draw) return;
+    bool aim = std::fabs(g_view_shift_x) > 0.14f;
+    bool hip = g_view_shift_x == 0 && g_view_shift_y == 0;
+    if (!aim && !hip) return;
+    int& n = g_gun_logged[aim ? 1 : 0];
+    if (n >= 10) return;
+    n++;
+    FILE* f = std::fopen("/storage/emulated/0/Black/SaveData/gun_vsc.log", "a");
+    if (!f) return;
+    std::fprintf(f, "== %s draw %d, vs_handle=%08X scale=%f shift=%f,%f\n", aim ? "AIM" : "HIP", n, unsigned(g_state.vs_handle),
+                 g_view_scale, g_view_shift_x, g_view_shift_y);
+    for (int r = 0; r < 64; r++) {
+        const auto& c = g_state.vsc[r];
+        std::fprintf(f, "c%d: %f %f %f %f\n", r, c[0], c[1], c[2], c[3]);
+    }
+    if (g_state.vs && g_gun_programs.insert(&*g_state.vs).second) {
+        std::fprintf(f, "program (%u words):", unsigned(g_state.vs->program.size()));
+        for (size_t i = 0; i < g_state.vs->program.size() && i < 400; i++)
+            std::fprintf(f, "%s%08X", i % 4 ? " " : "\n", unsigned(g_state.vs->program[i]));
+        std::fputc('\n', f);
+    }
+    std::fclose(f);
+}
+
 }  // namespace
 
 gpu::State& State() { return g_state; }
+
+void GunDraw(bool on) { g_gun_draw = on; }
 std::recursive_mutex& Lock() { return g_lock; }
 
 // draws grow about the viewport's centre, depth stays
@@ -1026,6 +1060,7 @@ HLE_STDCALL(D3DDevice_SetPixelShaderConstant, 3) {
 HLE_STDCALL(D3DDevice_DrawVertices, 3) {
     std::lock_guard<std::recursive_mutex> lock(g_lock);
     SyncDeferred();
+    GunLog();
     if (g_backend) g_backend->Draw(g_state, a[0], a[1], a[2], nullptr);
     return 0;
 }
@@ -1033,6 +1068,7 @@ HLE_STDCALL(D3DDevice_DrawVertices, 3) {
 HLE_STDCALL(D3DDevice_DrawIndexedVertices, 3) {
     std::lock_guard<std::recursive_mutex> lock(g_lock);
     SyncDeferred();
+    GunLog();
     const uint8_t* indices = a[2] ? static_cast<const uint8_t*>(HostPtr(a[2])) : nullptr;
     if (g_backend) g_backend->Draw(g_state, a[0], 0, a[1], indices);
     return 0;
