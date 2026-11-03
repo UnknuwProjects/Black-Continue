@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <fstream>
 #include <map>
 #include <sstream>
@@ -226,6 +227,12 @@ static void AdsTest(uint32_t data, float hip) {
             uint32_t off = 0;
             float value = 0;
             if ((in >> std::hex >> off) && (in >> std::dec >> value) && off < 0x400) g_ads_patches.push_back({off, value});
+        }
+        if (FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/ads_test.log", "a")) {
+            std::fprintf(log, "aim in: data=%08X, %u lines read\n", unsigned(data), unsigned(g_ads_patches.size()));
+            for (const AdsPatch& p : g_ads_patches)
+                std::fprintf(log, "  +%X was %08X, to %f\n", unsigned(p.off), unsigned(R32(data + p.off)), p.value);
+            std::fclose(log);
         }
     }
     for (const AdsPatch& p : g_ads_patches) {
