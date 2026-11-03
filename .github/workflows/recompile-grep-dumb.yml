@@ -7,16 +7,22 @@ on:
     inputs:
       targets:
         description: "Functions whose call sites to list, space separated"
-        default: "sub_001EB6B0 sub_001EDBC0"
+        default: "sub_001FD780 sub_001FD1F0"
       functions:
         description: "Functions whose whole body to print, space separated"
-        default: "sub_001EB6B0"
+        default: "sub_001FD780"
       globals:
         description: "Data addresses (8 hex digits) whose users to list, space separated"
-        default: "002EC464 002F3BFC"
+        default: ""
       both:
-        description: "Two instruction patterns separated by |, lists functions that contain both"
-        default: "0x002D45D4|0x3F0]"
+        description: "Instruction patterns separated by |, lists functions that contain all of them"
+        default: "0x002D45D4|0x438]"
+      both2:
+        description: "Same, second set"
+        default: "0x002D45D4|0x440]"
+      both3:
+        description: "Same, third set"
+        default: "0x002D45D4|0x3F4]"
 
 jobs:
   grep:
@@ -76,9 +82,11 @@ jobs:
           FUNCTIONS: ${{ inputs.functions }}
           GLOBALS: ${{ inputs.globals }}
           BOTH: ${{ inputs.both }}
+          BOTH2: ${{ inputs.both2 }}
+          BOTH3: ${{ inputs.both3 }}
         run: |
           set +e +o pipefail
-          echo "VERSION 5: bodies, callers, globals, both" > out.txt
+          echo "VERSION 6: bodies, callers, globals, pattern sets" > out.txt
           for T in $TARGETS; do
             {
               echo
@@ -115,27 +123,33 @@ jobs:
               ' generated/game/x86_recomp.*.cpp
             } >> out.txt
           done
-          if [ -n "$BOTH" ]; then
-            A=${BOTH%%|*}; B=${BOTH#*|}
+          for SET in "$BOTH" "$BOTH2" "$BOTH3"; do
+            [ -z "$SET" ] && continue
             {
               echo
-              echo "######## functions containing both $A and $B (function, then the matching instructions)"
-              awk -v a="$A" -v b="$B" '
-                function flush() { if (ha && hb) { print "== " fn; printf "%s", buf }; ha = 0; hb = 0; buf = "" }
+              echo "######## functions containing all of: $SET (function, then the matching instructions)"
+              awk -v pats="$SET" '
+                BEGIN { np = split(pats, P, "|") }
+                function flush(   i, ok) {
+                  ok = 1
+                  for (i = 1; i <= np; i++) if (!hit[i]) ok = 0
+                  if (ok && np > 0 && fn != "") { print "== " fn; printf "%s", buf }
+                  for (i = 1; i <= np; i++) hit[i] = 0
+                  buf = ""
+                }
                 /^X86_FUNC\(__imp__/ { flush(); fn = $0; sub(/^X86_FUNC\(__imp__/, "", fn); sub(/\).*/, "", fn) }
                 /^\t\/\/ / {
                   l = $0; sub(/^\t\/\/ /, "", l)
-                  if (index(l, a)) { ha = 1; buf = buf "  " l "\n" }
-                  else if (index(l, b)) { hb = 1; buf = buf "  " l "\n" }
+                  for (i = 1; i <= np; i++) if (index(l, P[i])) { hit[i] = 1; buf = buf "  " l "\n"; break }
                 }
                 END { flush() }
               ' generated/game/x86_recomp.*.cpp
             } >> out.txt
-          fi
+          done
           wc -l out.txt
           head -c 60000 out.txt
 
       - uses: actions/upload-artifact@v5
         with:
-          name: callers-v5
+          name: callers-v6
           path: out.txt
