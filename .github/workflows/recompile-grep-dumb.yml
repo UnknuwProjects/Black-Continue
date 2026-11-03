@@ -7,19 +7,19 @@ on:
     inputs:
       targets:
         description: "Functions whose call sites to list, space separated"
-        default: ""
+        default: "sub_0020D360 sub_0020F6A0"
       functions:
         description: "Functions whose whole body to print, space separated"
-        default: ""
+        default: "sub_0020D360 sub_0020F6A0"
       globals:
         description: "Data addresses (8 hex digits) whose users to list, space separated"
         default: ""
       both:
         description: "Instruction patterns separated by |, lists functions that contain all of them"
-        default: "0020D36A"
+        default: ""
       both2:
         description: "Same, second set"
-        default: "0020F79B"
+        default: ""
       both3:
         description: "Same, third set"
         default: ""
@@ -86,7 +86,7 @@ jobs:
           BOTH3: ${{ inputs.both3 }}
         run: |
           set +e +o pipefail
-          echo "VERSION 9: bodies, callers, globals, pattern sets" > logv9.txt
+          echo "VERSION 10: bodies, callers, globals, pattern sets" > logv10.txt
           for T in $TARGETS; do
             {
               echo
@@ -100,7 +100,7 @@ jobs:
                   f = FILENAME; sub(/.*x86_recomp\./, "", f)
                   print f ":" FNR " " fn " |" s
                 }' generated/game/x86_recomp.*.cpp
-            } >> logv9.txt
+            } >> logv10.txt
           done
           for F in $FUNCTIONS; do
             {
@@ -111,7 +111,7 @@ jobs:
                 on && (/^\t\/\/ / || /^loc_/) { l = $0; sub(/^\t\/\/ /, "", l); print l }
                 $0 ~ "^X86_WEAK_FUNC\\(" name "," { on = 0 }
               ' generated/game/x86_recomp.*.cpp
-            } >> logv9.txt
+            } >> logv10.txt
           done
           for G in $GLOBALS; do
             {
@@ -121,7 +121,7 @@ jobs:
                 /^X86_FUNC\(__imp__/ { fn = $0; sub(/^X86_FUNC\(__imp__/, "", fn); sub(/\).*/, "", fn) }
                 /^\t\/\/ / && index($0, "0x" g) { l = $0; sub(/^\t\/\/ /, "", l); print fn " | " l }
               ' generated/game/x86_recomp.*.cpp
-            } >> logv9.txt
+            } >> logv10.txt
           done
           for SET in "$BOTH" "$BOTH2" "$BOTH3"; do
             [ -z "$SET" ] && continue
@@ -144,12 +144,12 @@ jobs:
                 }
                 END { flush() }
               ' generated/game/x86_recomp.*.cpp
-            } >> logv9.txt
+            } >> logv10.txt
           done
-          wc -l logv9.txt
-          head -c 60000 logv9.txt
+          wc -l logv10.txt
+          head -c 60000 logv10.txt
 
       - uses: actions/upload-artifact@v5
         with:
-          name: callers-v9
-          path: logv9.txt
+          name: callers-v10
+          path: logv10.txt
