@@ -203,34 +203,32 @@ static float Widen(uint32_t degrees) {
 
 static float g_gun = 1.0f;  // the gun's picture over the view's
 
-// The gun at the aim: in the middle of the view, moved from where the game holds it.
-// ads_move.txt in SaveData, lines "TYPE dx dy fx fy" (ALL for any type not named): dx right and dy up in view units,
-// what is near moving more; fx and fy right and up on the screen, everything moving alike (fx and fy may be left out).
-// A fifth number is how far what sits on the gun (muzzle flash, shells, muzzle smoke, the start of tracers) follows
-// the move: 1 all the way (left out: 1), 0 not at all, -1 the other way.
-// E.g. "ALL -0.07 0.03 -0.11 0 1", "RPG 0 0". No file, no move
+// The gun at the aim: in the middle of the view. The game builds the first person gun's matrix once a frame
+// (player + 0x420, in view units: x right, y up, z ahead, the last row its position) and the gun's model, the
+// locators on it (muzzle flash, shells, sparks, smoke) and the muzzle matrix of the tracers all start from it. So the
+// move is added to that matrix at its source (ViewmodelShift) and everything follows alike, nothing is moved
+// afterwards. ads_view.txt in SaveData, lines "TYPE dx dy dz" (ALL for any type not named): dx right, dy up and dz
+// ahead in view units, dz may be left out. E.g. "ALL -0.07 0.03 0", "RPG 0 0 0". No file, no move
 struct AdsMove {
-    float v[5] = {0, 0, 0, 0, 1};
+    float v[3] = {0, 0, 0};
 };
 static std::map<std::string, AdsMove> g_ads_shifts;
 static time_t g_ads_stamp = -1;  // the file's change time when it was read
 static std::chrono::steady_clock::time_point g_ads_checked;
-static float g_shift[4] = {};  // the move this frame
-static float g_effect = 0;     // how far the effects on the gun follow it this frame
+static float g_vm[3] = {};     // the move of the gun's matrix this frame
+static float g_shift[4] = {};  // the old moves on the draws and the effects: left at nothing, the matrix has it now
+static float g_effect = 0;
 
 static void LoadAdsShifts(uint32_t data, const char* type) {
     g_ads_shifts.clear();
-    std::ifstream f("/storage/emulated/0/Black/SaveData/ads_move.txt");
+    std::ifstream f("/storage/emulated/0/Black/SaveData/ads_view.txt");
     std::string line;
     while (std::getline(f, line)) {
         std::istringstream in(line);
         std::string name;
         AdsMove m;
         if (!(in >> name >> m.v[0] >> m.v[1])) continue;
-        if (in >> m.v[2]) {
-            in >> m.v[3];
-            in >> m.v[4];
-        }
+        in >> m.v[2];
         g_ads_shifts[name] = m;
     }
     if (FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/ads_test.log", "a")) {
@@ -242,8 +240,7 @@ static void LoadAdsShifts(uint32_t data, const char* type) {
 // The file is looked at twice a second while aiming: saved again, it is read again, no new level needed
 static void AdsShift(uint32_t data, float hip) {
     float blend = 1 - hip;
-    for (float& v : g_shift) v = 0;
-    g_effect = 0;
+    for (float& v : g_vm) v = 0;
     if (!data || blend <= 0) return;
     char type[4] = {};
     std::memcpy(type, HostPtr(data + 0x130), 3);  // the type code, "ASR", "SMG", "PST"...
@@ -251,7 +248,7 @@ static void AdsShift(uint32_t data, float hip) {
     if (g_ads_stamp == -1 || now - g_ads_checked > std::chrono::milliseconds(500)) {
         g_ads_checked = now;
         struct stat st;
-        time_t stamp = stat("/storage/emulated/0/Black/SaveData/ads_move.txt", &st) == 0 ? st.st_mtime : 0;
+        time_t stamp = stat("/storage/emulated/0/Black/SaveData/ads_view.txt", &st) == 0 ? st.st_mtime : 0;
         if (stamp != g_ads_stamp) {
             g_ads_stamp = stamp;
             LoadAdsShifts(data, type);
@@ -259,10 +256,16 @@ static void AdsShift(uint32_t data, float hip) {
     }
     auto it = g_ads_shifts.find(type);
     if (it == g_ads_shifts.end()) it = g_ads_shifts.find("ALL");
-    if (it != g_ads_shifts.end()) {
-        for (int i = 0; i < 4; i++) g_shift[i] = it->second.v[i] * blend;
-        g_effect = it->second.v[4];
-    }
+    if (it != g_ads_shifts.end())
+        for (int i = 0; i < 3; i++) g_vm[i] = it->second.v[i] * blend;
+}
+
+// The first person gun's matrix is done (ebx the player, 0x1E6757, right before the models are placed with it): the
+// aim's move is added to its position row, which the next frame builds again from the weapon's data
+void ViewmodelShift(X86Context& ctx, uint8_t*) {
+    if (ctx.ebx != Player() || (!g_vm[0] && !g_vm[1] && !g_vm[2])) return;
+    float* row = &G<float>(ctx.ebx + 0x450);
+    for (int i = 0; i < 3; i++) row[i] += g_vm[i];
 }
 
 // Is the gun's picture anywhere but where the game puts it: grown by the viewmodel setting or moved by the aim
