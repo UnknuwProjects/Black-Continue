@@ -23,8 +23,7 @@ using namespace layout;
 
 namespace d3d {
 void ViewScale(float xy);
-void ViewShift(float x, float y);
-void GunDraw(bool on);
+void GunDraw(bool on, float dx, float dy);
 }
 
 namespace game {
@@ -198,16 +197,16 @@ static float Widen(uint32_t degrees) {
 
 static float g_gun = 1.0f;  // the gun's picture over the view's
 
-// The gun at the aim: in the middle of the view, by a share of the screen it moves from where the game holds it.
-// ads_shift.txt in SaveData, lines "TYPE x y" (x right and y down, shares of the width and the height; ALL for any
-// type not named, e.g. "ALL -0.15 -0.08"). No file, no move
+// The gun at the aim: in the middle of the view, moved in it by a step of view units from where the game holds it.
+// ads_move.txt in SaveData, lines "TYPE x y" (x right and y up; ALL for any type not named, e.g. "ALL -0.11 0.03",
+// "RPG 0 0"). No file, no move
 static std::map<std::string, std::pair<float, float>> g_ads_shifts;
 static bool g_ads_loaded = false;
 static float g_shift_x = 0, g_shift_y = 0;  // the move this frame
 
 static void LoadAdsShifts(uint32_t data, const char* type) {
     g_ads_shifts.clear();
-    std::ifstream f("/storage/emulated/0/Black/SaveData/ads_shift.txt");
+    std::ifstream f("/storage/emulated/0/Black/SaveData/ads_move.txt");
     std::string line;
     while (std::getline(f, line)) {
         std::istringstream in(line);
@@ -260,18 +259,12 @@ X86_EXTERN_FUNC(__imp__sub_00176F60);
 X86_FUNC(sub_00176F60) {
     if (ctx.esi == R32(kDisplay) + kDisplayDrawLists + kAlphaDrawList * kDrawListSize) game::EspCamera();
     bool list = ctx.esi == R32(kDisplay) + kDisplayDrawLists + kGunDrawList * kDrawListSize;
-    bool gun = (g_gun != 1 || g_shift_x != 0 || g_shift_y != 0) && list;
-    if (list) d3d::GunDraw(true);
-    if (gun) {
-        d3d::ViewScale(g_gun);
-        d3d::ViewShift(g_shift_x, g_shift_y);
-    }
+    bool gun = g_gun != 1 && list;
+    if (list) d3d::GunDraw(true, g_shift_x, g_shift_y);
+    if (gun) d3d::ViewScale(g_gun);
     __imp__sub_00176F60(ctx, base);
-    if (list) d3d::GunDraw(false);
-    if (gun) {
-        d3d::ViewScale(1);
-        d3d::ViewShift(0, 0);
-    }
+    if (list) d3d::GunDraw(false, 0, 0);
+    if (gun) d3d::ViewScale(1);
 }
 
 // What sits on the gun follows its picture: across the player's view a point or an axis grows by the same share,
