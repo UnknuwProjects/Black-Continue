@@ -2,8 +2,10 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <cstdio>
-#include <set>
+#include <fstream>
+#include <map>
+#include <sstream>
+#include <vector>
 #include <thread>
 
 #include "app/app.h"
@@ -193,20 +195,46 @@ static float Widen(uint32_t degrees) {
 
 static float g_gun = 1.0f;  // the gun's picture over the view's
 
-// TEMPORARY: the data of each weapon the player aims in with, once, to ads_dump.log (to find the aim's offset)
-static void DumpAimData(uint32_t weapon, uint32_t data, float aim) {
-    static std::set<uint32_t> done;
-    static bool first = true;
-    if (!data || done.size() >= 16 || !done.insert(data).second) return;
-    if (FILE* f = std::fopen("/storage/emulated/0/Black/SaveData/ads_dump.log", first ? "w" : "a")) {
-        first = false;
-        std::fprintf(f, "weapon=%08X data=%08X aim=%f\n", unsigned(weapon), unsigned(data), aim);
-        for (uint32_t off = 0; off < 0x200; off += 32) {
-            std::fprintf(f, "+%03X:", unsigned(off));
-            for (uint32_t i = 0; i < 8; i++) std::fprintf(f, " %08X", unsigned(R32(data + off + i * 4)));
-            std::fputc('\n', f);
+// TEMPORARY test: ads_test.txt in SaveData, one line "offset value" (hex offset into the weapon's data, a float), e.g. "E0 0.0".
+// While the aim is in the player's weapon has that float at that place, blended in by the aim and put back at the hip
+struct AdsPatch {
+    uint32_t off;
+    float value;
+};
+static std::vector<AdsPatch> g_ads_patches;
+static std::map<uint32_t, uint32_t> g_ads_kept;  // address -> the game's own value
+static uint32_t g_ads_data = 0;
+
+static void AdsRestore() {
+    for (auto& [at, bits] : g_ads_kept) W32(at, bits);
+    g_ads_kept.clear();
+    g_ads_data = 0;
+}
+
+static void AdsTest(uint32_t data, float hip) {
+    if (hip >= 1.0f || !data || (g_ads_data && g_ads_data != data)) {
+        AdsRestore();
+        if (hip >= 1.0f || !data) return;
+    }
+    if (!g_ads_data) {  // the aim just began: the file is read again
+        g_ads_data = data;
+        g_ads_patches.clear();
+        std::ifstream f("/storage/emulated/0/Black/SaveData/ads_test.txt");
+        std::string line;
+        while (std::getline(f, line)) {
+            std::istringstream in(line);
+            uint32_t off = 0;
+            float value = 0;
+            if ((in >> std::hex >> off) && (in >> std::dec >> value) && off < 0x400) g_ads_patches.push_back({off, value});
         }
-        std::fclose(f);
+    }
+    for (const AdsPatch& p : g_ads_patches) {
+        uint32_t at = data + p.off;
+        auto it = g_ads_kept.find(at);
+        if (it == g_ads_kept.end()) it = g_ads_kept.emplace(at, R32(at)).first;
+        float own;
+        std::memcpy(&own, &it->second, 4);
+        G<float>(at) = own + (p.value - own) * (1 - hip);
     }
 }
 
@@ -217,7 +245,7 @@ void FieldOfView(X86Context& ctx, uint8_t*) {
     float aim = data ? G<float>(data + kDataAimZoom) : 1;
     float zoom = ctx.xmm[0].f[0];
     float hip = aim > 1 ? std::clamp((aim - zoom) / (aim - 1), 0.0f, 1.0f) : 1.0f;
-    if (aim > 1 && hip < 0.02f && R32(ctx.ecx + kWeaponOwner) == Player()) DumpAimData(ctx.ecx, data, aim);
+    if (R32(ctx.ecx + kWeaponOwner) == Player()) AdsTest(data, hip);
     float view = 1 + (Widen(game::Opt().fov) - 1) * hip;
     g_gun = view / (1 + (Widen(game::Opt().viewmodel_fov) - 1) * hip);
     float& fov = ctx.xmm[1].f[0];
