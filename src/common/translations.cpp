@@ -232,6 +232,7 @@ constexpr Entry kEntries[] = {
     {"* SILENCED SOUND ONLY", {{}, {}, {}, {}, u"* Hanya suara disenyapkan"}},
     {"SUPPLIES", {{}, {}, {}, {}, u"Persediaan"}},
     {"FILL MEDKITS", {{}, {}, {}, {}, u"Isi P3K"}},
+    {"LOAD CHECKPOINT", {{}, {}, {}, {}, u"Muat checkpoint"}},
 
     // aim mode, fire button aim, and the pad's hint in the panel
     {"AIM MODE", {{}, {}, {}, {}, u"Mode bidik"}},
