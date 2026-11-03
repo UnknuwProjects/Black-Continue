@@ -23,6 +23,7 @@ using namespace layout;
 
 namespace d3d {
 void ViewScale(float xy);
+void ViewShift(float x, float y);
 }
 
 namespace game {
@@ -196,53 +197,47 @@ static float Widen(uint32_t degrees) {
 
 static float g_gun = 1.0f;  // the gun's picture over the view's
 
-// TEMPORARY test: ads_test.txt in SaveData, one line "offset value" (hex offset into the weapon's data, a float), e.g. "E0 0.0".
-// While the aim is in the player's weapon has that float at that place, blended in by the aim and put back at the hip
-struct AdsPatch {
-    uint32_t off;
-    float value;
-};
-static std::vector<AdsPatch> g_ads_patches;
-static std::map<uint32_t, uint32_t> g_ads_kept;  // address -> the game's own value
-static uint32_t g_ads_data = 0;
+// The gun at the aim: in the middle of the view, by a share of the screen it moves from where the game holds it.
+// ads_shift.txt in SaveData, lines "TYPE x y" (x right and y down, shares of the width and the height; ALL for any
+// type not named, e.g. "ALL -0.15 -0.08"). No file, no move
+static std::map<std::string, std::pair<float, float>> g_ads_shifts;
+static bool g_ads_loaded = false;
+static float g_shift_x = 0, g_shift_y = 0;  // the move this frame
 
-static void AdsRestore() {
-    for (auto& [at, bits] : g_ads_kept) W32(at, bits);
-    g_ads_kept.clear();
-    g_ads_data = 0;
+static void LoadAdsShifts(uint32_t data, const char* type) {
+    g_ads_shifts.clear();
+    std::ifstream f("/storage/emulated/0/Black/SaveData/ads_shift.txt");
+    std::string line;
+    while (std::getline(f, line)) {
+        std::istringstream in(line);
+        std::string name;
+        float x = 0, y = 0;
+        if (in >> name >> x >> y) g_ads_shifts[name] = {x, y};
+    }
+    if (FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/ads_test.log", "a")) {
+        std::fprintf(log, "aim in: data=%08X type=%s, %u lines\n", unsigned(data), type, unsigned(g_ads_shifts.size()));
+        std::fclose(log);
+    }
 }
 
-static void AdsTest(uint32_t data, float hip) {
-    if (hip >= 1.0f || !data || (g_ads_data && g_ads_data != data)) {
-        AdsRestore();
-        if (hip >= 1.0f || !data) return;
+static void AdsShift(uint32_t data, float hip) {
+    float blend = 1 - hip;
+    if (!data || blend <= 0) {
+        g_ads_loaded = false;
+        g_shift_x = g_shift_y = 0;
+        return;
     }
-    if (!g_ads_data) {  // the aim just began: the file is read again
-        g_ads_data = data;
-        g_ads_patches.clear();
-        std::ifstream f("/storage/emulated/0/Black/SaveData/ads_test.txt");
-        std::string line;
-        while (std::getline(f, line)) {
-            std::istringstream in(line);
-            uint32_t off = 0;
-            float value = 0;
-            if ((in >> std::hex >> off) && (in >> std::dec >> value) && off < 0x400) g_ads_patches.push_back({off, value});
-        }
-        if (FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/ads_test.log", "a")) {
-            std::fprintf(log, "aim in: data=%08X, %u lines read\n", unsigned(data), unsigned(g_ads_patches.size()));
-            for (const AdsPatch& p : g_ads_patches)
-                std::fprintf(log, "  +%X was %08X, to %f\n", unsigned(p.off), unsigned(R32(data + p.off)), p.value);
-            std::fclose(log);
-        }
+    char type[4] = {};
+    std::memcpy(type, HostPtr(data + 0x128), 3);
+    if (!g_ads_loaded) {
+        g_ads_loaded = true;
+        LoadAdsShifts(data, type);
     }
-    for (const AdsPatch& p : g_ads_patches) {
-        uint32_t at = data + p.off;
-        auto it = g_ads_kept.find(at);
-        if (it == g_ads_kept.end()) it = g_ads_kept.emplace(at, R32(at)).first;
-        float own;
-        std::memcpy(&own, &it->second, 4);
-        G<float>(at) = own + (p.value - own) * (1 - hip);
-    }
+    auto it = g_ads_shifts.find(type);
+    if (it == g_ads_shifts.end()) it = g_ads_shifts.find("ALL");
+    bool found = it != g_ads_shifts.end();
+    g_shift_x = found ? it->second.first * blend : 0;
+    g_shift_y = found ? it->second.second * blend : 0;
 }
 
 // The view of play, 70 over the zoom: the setting from the hip, the game's own once the aim is in.
@@ -252,7 +247,7 @@ void FieldOfView(X86Context& ctx, uint8_t*) {
     float aim = data ? G<float>(data + kDataAimZoom) : 1;
     float zoom = ctx.xmm[0].f[0];
     float hip = aim > 1 ? std::clamp((aim - zoom) / (aim - 1), 0.0f, 1.0f) : 1.0f;
-    if (R32(ctx.ecx + kWeaponOwner) == Player()) AdsTest(data, hip);
+    if (R32(ctx.ecx + kWeaponOwner) == Player()) AdsShift(data, hip);
     float view = 1 + (Widen(game::Opt().fov) - 1) * hip;
     g_gun = view / (1 + (Widen(game::Opt().viewmodel_fov) - 1) * hip);
     float& fov = ctx.xmm[1].f[0];
@@ -263,10 +258,16 @@ void FieldOfView(X86Context& ctx, uint8_t*) {
 X86_EXTERN_FUNC(__imp__sub_00176F60);
 X86_FUNC(sub_00176F60) {
     if (ctx.esi == R32(kDisplay) + kDisplayDrawLists + kAlphaDrawList * kDrawListSize) game::EspCamera();
-    bool gun = g_gun != 1 && ctx.esi == R32(kDisplay) + kDisplayDrawLists + kGunDrawList * kDrawListSize;
-    if (gun) d3d::ViewScale(g_gun);
+    bool gun = (g_gun != 1 || g_shift_x != 0 || g_shift_y != 0) && ctx.esi == R32(kDisplay) + kDisplayDrawLists + kGunDrawList * kDrawListSize;
+    if (gun) {
+        d3d::ViewScale(g_gun);
+        d3d::ViewShift(g_shift_x, g_shift_y);
+    }
     __imp__sub_00176F60(ctx, base);
-    if (gun) d3d::ViewScale(1);
+    if (gun) {
+        d3d::ViewScale(1);
+        d3d::ViewShift(0, 0);
+    }
 }
 
 // What sits on the gun follows its picture: across the player's view a point or an axis grows by the same share,
