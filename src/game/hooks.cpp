@@ -24,6 +24,7 @@ using namespace layout;
 namespace d3d {
 void ViewScale(float xy);
 void ViewShift(float x, float y);
+void GunDraw(bool on);
 }
 
 namespace game {
@@ -258,12 +259,15 @@ void FieldOfView(X86Context& ctx, uint8_t*) {
 X86_EXTERN_FUNC(__imp__sub_00176F60);
 X86_FUNC(sub_00176F60) {
     if (ctx.esi == R32(kDisplay) + kDisplayDrawLists + kAlphaDrawList * kDrawListSize) game::EspCamera();
-    bool gun = (g_gun != 1 || g_shift_x != 0 || g_shift_y != 0) && ctx.esi == R32(kDisplay) + kDisplayDrawLists + kGunDrawList * kDrawListSize;
+    bool list = ctx.esi == R32(kDisplay) + kDisplayDrawLists + kGunDrawList * kDrawListSize;
+    bool gun = (g_gun != 1 || g_shift_x != 0 || g_shift_y != 0) && list;
+    if (list) d3d::GunDraw(true);
     if (gun) {
         d3d::ViewScale(g_gun);
         d3d::ViewShift(g_shift_x, g_shift_y);
     }
     __imp__sub_00176F60(ctx, base);
+    if (list) d3d::GunDraw(false);
     if (gun) {
         d3d::ViewScale(1);
         d3d::ViewShift(0, 0);
