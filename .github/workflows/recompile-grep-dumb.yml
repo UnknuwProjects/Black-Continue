@@ -7,22 +7,22 @@ on:
     inputs:
       targets:
         description: "Functions whose call sites to list, space separated"
-        default: "sub_001FD780 sub_001FD1F0"
+        default: "sub_001BEF10 sub_001BEFF0 sub_001D6EF0 sub_001D6200"
       functions:
         description: "Functions whose whole body to print, space separated"
-        default: "sub_001FD780"
+        default: "sub_001BEF10 sub_001D6200"
       globals:
         description: "Data addresses (8 hex digits) whose users to list, space separated"
         default: ""
       both:
         description: "Instruction patterns separated by |, lists functions that contain all of them"
-        default: "0x002D45D4|0x438]"
+        default: "0x002D45D4|0x934]"
       both2:
         description: "Same, second set"
-        default: "0x002D45D4|0x440]"
+        default: "0x002D45D4|0x930]"
       both3:
         description: "Same, third set"
-        default: "0x002D45D4|0x3F4]"
+        default: "rep movs|0x2BC]"
 
 jobs:
   grep:
@@ -86,7 +86,7 @@ jobs:
           BOTH3: ${{ inputs.both3 }}
         run: |
           set +e +o pipefail
-          echo "VERSION 6: bodies, callers, globals, pattern sets" > out.txt
+          echo "VERSION 7: bodies, callers, globals, pattern sets" > out.txt
           for T in $TARGETS; do
             {
               echo
@@ -151,5 +151,5 @@ jobs:
 
       - uses: actions/upload-artifact@v5
         with:
-          name: callers-v6
+          name: callers-v7
           path: out.txt
