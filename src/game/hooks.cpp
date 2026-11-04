@@ -3,6 +3,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
+#include <string>
 #include <fstream>
 #include <map>
 #include <sstream>
@@ -215,13 +217,14 @@ static float g_gun = 1.0f;  // the gun's picture over the view's
 // 1 (or left out) moves the casings with the gun, 0 leaves them, in between a part of it. All after dy may be left out. E.g. "ALL 0.10 0.03",
 // "ASR 0.10 0.03 0 4 0"
 struct AdsMove {
-    float v[6] = {0, 0, 0, 0, 0, 1};
+    float v[8] = {0, 0, 0, 0, 0, 1, 0, 1};  // dx dy dz yaw pitch shell cam recoil
 };
 static std::map<std::string, AdsMove> g_ads_shifts;
 static time_t g_ads_stamp = -1;  // the file's change time when it was read
 static std::chrono::steady_clock::time_point g_ads_checked;
 static float g_vm[5] = {};     // the move of the gun's matrix this frame: dx dy dz yaw pitch
 static float g_shell = 0;      // 1: the casings go along
+static float g_cam = 0;        // 1: the camera keeps its view at the aim, the gun comes to it instead
 static float g_shift[4] = {};  // the old moves on the draws and the effects: left at nothing, the matrix has it now
 static float g_effect = 0;
 
@@ -250,7 +253,7 @@ static void LoadAdsShifts(uint32_t data, const char* type) {
         std::string name;
         AdsMove m;
         if (!(in >> name >> m.v[0] >> m.v[1])) continue;
-        for (int i = 2; i < 6; i++) {
+        for (int i = 2; i < 8; i++) {
             float t;
             if (!(in >> t)) break;
             m.v[i] = t;
@@ -263,12 +266,10 @@ static void LoadAdsShifts(uint32_t data, const char* type) {
     }
 }
 
-// The file is looked at twice a second while aiming: saved again, it is read again, no new level needed
-static void AdsShift(uint32_t data, float hip) {
-    float blend = 1 - hip;
-    for (float& v : g_vm) v = 0;
-    g_shell = 0;
-    if (!data || blend <= 0) return;
+// The weapon's row of ads_view.txt: its own, then its class's, then ALL. The file is looked at twice a second: saved
+// again, it is read again, no new level needed. Used at the aim and by the recoil
+static const AdsMove* AdsRow(uint32_t data) {
+    if (!data) return nullptr;
     char type[4] = {};
     std::memcpy(type, HostPtr(data + 0x130), 3);  // the type code, "ASR", "SMG", "PST"...
     auto now = std::chrono::steady_clock::now();
@@ -281,7 +282,6 @@ static void AdsShift(uint32_t data, float hip) {
             LoadAdsShifts(data, type);
         }
     }
-    // the weapon's own row first, then its class's, then ALL
     const char* name = TableName(data);
     const char* used = name;
     auto it = name ? g_ads_shifts.find(name) : g_ads_shifts.end();
@@ -299,14 +299,26 @@ static void AdsShift(uint32_t data, float hip) {
     if (data != logged_data || logged_used != used) {
         logged_data = data;
         logged_used = used;
-        if (FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/ads_test.log", "a"))  {
-            std::fprintf(log, "aim row: data=%08X name=%s class=%s -> row %s\n", unsigned(data), name ? name : "?", type, used);
+        if (FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/ads_test.log", "a")) {
+            std::fprintf(log, "aim row: data=%08X name=%s class=%s -> row %s\n", unsigned(data), name ? name : "?", type,
+                         used);
             std::fclose(log);
         }
     }
-    if (it == g_ads_shifts.end()) return;
-    for (int i = 0; i < 5; i++) g_vm[i] = it->second.v[i] * blend;
-    g_shell = it->second.v[5];
+    return it == g_ads_shifts.end() ? nullptr : &it->second;
+}
+
+static void AdsShift(uint32_t data, float hip) {
+    float blend = 1 - hip;
+    for (float& v : g_vm) v = 0;
+    g_shell = 0;
+    g_cam = 0;
+    if (!data || blend <= 0) return;
+    const AdsMove* row = AdsRow(data);
+    if (!row) return;
+    for (int i = 0; i < 5; i++) g_vm[i] = row->v[i] * blend;
+    g_shell = row->v[5];
+    g_cam = row->v[6];
 }
 
 // The first person gun's matrix is done (ebx the player, 0x1E6757, right before the models are placed with it): the
@@ -392,17 +404,52 @@ static bool GunMoved() {
     return g_gun != 1 || (g_effect != 0 && (g_shift[0] || g_shift[1] || g_shift[2] || g_shift[3]));
 }
 
+static float g_base_fov = 0;  // the game's own view at the hip, kept to hold the camera at the aim
+static float g_own_aim = 0;   // the aim of the weapons the game gives none (SPAS 12, Remington): 0 hip .. 1 aimed
+
 // The view of play, 70 over the zoom: the setting from the hip, the game's own once the aim is in.
-// ecx the weapon, xmm0 its zoom. Scripted cameras write theirs after this
+// ecx the weapon, xmm0 its zoom, xmm1 the view. Scripted cameras write theirs after this.
+// cam in ads_view.txt: 1 holds the view at the hip's while aiming (the gun comes to the eye instead of the view going
+// to the gun), in between a part of it. The SPAS 12 and the Remington have no zoom, the aim button is read here (the
+// byte the zoom step reads too) and the aim made by hand, only the gun moves
 void FieldOfView(X86Context& ctx, uint8_t*) {
     uint32_t data = R32(ctx.ecx + kWeaponData);
+    bool mine = R32(ctx.ecx + kWeaponOwner) == Player();
     float aim = data ? G<float>(data + kDataAimZoom) : 1;
     float zoom = ctx.xmm[0].f[0];
-    float hip = aim > 1 ? std::clamp((aim - zoom) / (aim - 1), 0.0f, 1.0f) : 1.0f;
-    if (R32(ctx.ecx + kWeaponOwner) == Player()) AdsShift(data, hip);
-    float view = 1 + (Widen(game::Opt().fov) - 1) * hip;
-    g_gun = view / (1 + (Widen(game::Opt().viewmodel_fov) - 1) * hip);
     float& fov = ctx.xmm[1].f[0];
+    float hip = aim > 1 ? std::clamp((aim - zoom) / (aim - 1), 0.0f, 1.0f) : 1.0f;
+    const char* name = data ? TableName(data) : nullptr;
+    bool own = mine && aim <= 1 && name && (!std::strcmp(name, "SHG") || !std::strcmp(name, "RM1"));
+    if (own) {
+        bool held = G<uint8_t>(ctx.ecx + 0x105) != 0;
+        static int last = -1, logged = 0;
+        if (last != int(held) && logged < 20) {  // does the aim button reach this weapon: to ads_test.log
+            last = held;
+            logged++;
+            if (FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/ads_test.log", "a")) {
+                std::fprintf(log, "own aim: %s byte105=%u\n", name, unsigned(G<uint8_t>(ctx.ecx + 0x105)));
+                std::fclose(log);
+            }
+        }
+        g_own_aim += ((held ? 1.0f : 0.0f) - g_own_aim) * (1 - std::pow(0.75f, FrameShare()));
+        if (g_own_aim > 0.999f) g_own_aim = 1;
+        if (g_own_aim < 0.001f) g_own_aim = 0;
+        hip = 1 - g_own_aim;
+    } else if (mine) {
+        g_own_aim = 0;
+        if (zoom <= 1.001f) g_base_fov = fov;  // not zoomed: this is the view the camera keeps
+    }
+    if (mine) AdsShift(data, hip);
+    float keep = 0;
+    if (mine && !own && g_cam != 0 && zoom > 1.001f) {
+        keep = std::clamp(g_cam, 0.0f, 1.0f);
+        float base = g_base_fov > 0 ? g_base_fov : fov * zoom;  // before one is kept: the zoom taken out by degrees
+        fov += (base - fov) * keep;
+    }
+    float shown = own ? 1.0f : hip + (1 - hip) * keep;  // how much of the hip's setting stays
+    float view = 1 + (Widen(game::Opt().fov) - 1) * shown;
+    g_gun = view / (1 + (Widen(game::Opt().viewmodel_fov) - 1) * shown);
     if (view != 1) fov = std::atan(std::tan(fov * kHalf) * view) / kHalf;
 }
 
@@ -517,8 +564,14 @@ X86_FUNC(sub_001D2860) {
 // Recoil dies away by a factor a frame. ebx the player: the kick a shot leaves (0x1EFE58) is spent here before
 // it reaches the view, the cheat makes it nothing
 void RecoilDecay(X86Context& ctx, uint8_t*) {
+    // recoil in ads_view.txt, a weapon's own: 1 the game's, 0 none, in between a part of it
+    float kick = 1;
+    if (ctx.ebx == Player()) {
+        uint32_t weapon = R32(ctx.ebx + kPlayerWeapon);
+        if (const AdsMove* row = weapon ? AdsRow(R32(weapon + kWeaponData)) : nullptr) kick = std::clamp(row->v[7], 0.0f, 1.0f);
+    }
     bool none = game::Opt().no_recoil && ctx.ebx == Player();
-    ctx.xmm[0].f[0] = none ? 0.0f : std::pow(ctx.xmm[0].f[0], FrameShare());
+    ctx.xmm[0].f[0] = none ? 0.0f : std::pow(ctx.xmm[0].f[0], FrameShare()) * kick;
 }
 
 constexpr uint32_t kDataSwayShares = 0x104;
