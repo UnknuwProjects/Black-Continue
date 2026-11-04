@@ -472,6 +472,9 @@ void SetMenu(bool menu) { g_menu = menu; }
 
 bool KeyboardActive() { return g_keyboard; }
 
+// true while LatchAim sends the aim as short pulses (MODE BIDIK = KETUK + TAHAN with HOLD TO AIM off): hooks.cpp reads it
+bool AimPulseMode() { return g_aim_hybrid && !game::Opt().hold_aim; }
+
 void TapConfirm() { g_confirm_until = NowMs() + kTapMs; }
 
 void SetTextEntry(bool on) {
