@@ -225,6 +225,22 @@ static float g_shell = 0;      // 1: the casings go along
 static float g_shift[4] = {};  // the old moves on the draws and the effects: left at nothing, the matrix has it now
 static float g_effect = 0;
 
+// Every weapon has its own key: its data block is one of the game's tables, 0x1E0 apart from the first at 0x8227D330, in
+// the order weapons_diag.log prints ("weapons: table N = BG1_..."). The type code in the data (+0x130) is only the
+// weapon's class (PST, SMG, ASR...), shared by several weapons. The suppressed variants share the data, so they have no
+// key of their own: one row serves both.
+static const char* const kTableNames[] = {"PST", "SHG", "SNR", "SMG", "ASR", "AK1", "RPG", "GRL", "SM3",
+                                          "P90", "HVY", "MGN", "M16", "RM1", "GK1", "MP1", "BNS"};
+constexpr uint32_t kTableBase = 0x8227D330;
+constexpr uint32_t kTableStride = 0x1E0;
+constexpr uint32_t kTableCount = sizeof(kTableNames) / sizeof(kTableNames[0]);
+
+static const char* TableName(uint32_t data) {
+    if (data < kTableBase || (data - kTableBase) % kTableStride) return nullptr;
+    uint32_t index = (data - kTableBase) / kTableStride;
+    return index < kTableCount ? kTableNames[index] : nullptr;
+}
+
 static void LoadAdsShifts(uint32_t data, const char* type) {
     g_ads_shifts.clear();
     std::ifstream f("/storage/emulated/0/Black/SaveData/ads_view.txt");
@@ -265,8 +281,29 @@ static void AdsShift(uint32_t data, float hip) {
             LoadAdsShifts(data, type);
         }
     }
-    auto it = g_ads_shifts.find(type);
-    if (it == g_ads_shifts.end()) it = g_ads_shifts.find("ALL");
+    // the weapon's own row first, then its class's, then ALL
+    const char* name = TableName(data);
+    const char* used = name;
+    auto it = name ? g_ads_shifts.find(name) : g_ads_shifts.end();
+    if (it == g_ads_shifts.end()) {
+        used = type;
+        it = g_ads_shifts.find(type);
+    }
+    if (it == g_ads_shifts.end()) {
+        used = "ALL";
+        it = g_ads_shifts.find("ALL");
+    }
+    if (it == g_ads_shifts.end()) used = "none";
+    static uint32_t logged_data = 0;
+    static std::string logged_used;
+    if (data != logged_data || logged_used != used) {
+        logged_data = data;
+        logged_used = used;
+        if (FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/ads_test.log", "a"))  {
+            std::fprintf(log, "aim row: data=%08X name=%s class=%s -> row %s\n", unsigned(data), name ? name : "?", type, used);
+            std::fclose(log);
+        }
+    }
     if (it == g_ads_shifts.end()) return;
     for (int i = 0; i < 5; i++) g_vm[i] = it->second.v[i] * blend;
     g_shell = it->second.v[5];
@@ -311,6 +348,15 @@ void ViewmodelShift(X86Context& ctx, uint8_t*) {
 // the move and the turn: 1 whole, 0 none. The first ones are written to ads_test.log
 void ShellShift(X86Context& ctx, uint8_t*) {
     uint32_t player = R32(ctx.ebp + 8);
+    static int calls = 0;
+    if (calls < 4) {  // does the hook run at all, and with what: to ads_test.log
+        calls++;
+        if (FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/ads_test.log", "a")) {
+            std::fprintf(log, "shell call: arg=%08X player=%08X g_shell=%.2f move=%.3f %.3f %.3f\n", unsigned(player),
+                         unsigned(Player()), g_shell, g_vm[0], g_vm[1], g_vm[2]);
+            std::fclose(log);
+        }
+    }
     if (player != Player() || g_shell == 0 || (!g_vm[0] && !g_vm[1] && !g_vm[2] && !g_vm[3] && !g_vm[4])) return;
     float* pos = &G<float>(ctx.ebx + 0x40);
     float before[3] = {pos[0], pos[1], pos[2]};
