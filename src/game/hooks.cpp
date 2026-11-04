@@ -502,6 +502,23 @@ static bool AimHeld() {
     return (PadBits() & bit) != 0;
 }
 
+// The aim of the SPAS 12 / Remington as the game's other weapons take it. In MODE BIDIK NORMAL, or with HOLD TO AIM on, the button is passed as
+// held and is followed as it is. In KETUK + TAHAN with HOLD TO AIM off the touch layer sends the game a short pulse per press (touch.cpp:
+// LatchAim), so the aim is a toggle on each rising edge here too, or it would blink for the length of the pulse.
+namespace input { bool AimPulseMode(); }  // touch.cpp
+static bool g_own_prev = false, g_own_toggle = false;
+static bool OwnAimHeld() {
+    bool bit = AimHeld();
+    if (!input::AimPulseMode()) {  // the level of the button: NORMAL, or HOLD TO AIM on
+        g_own_prev = bit;
+        g_own_toggle = false;
+        return bit;
+    }
+    if (bit && !g_own_prev) g_own_toggle = !g_own_toggle;
+    g_own_prev = bit;
+    return g_own_toggle;
+}
+
 static float g_base_fov = 0;  // the game's own view at the hip, kept to hold the camera at the aim
 static float g_own_aim = 0;   // the aim of the weapons the game gives none (SPAS 12, Remington): 0 hip .. 1 aimed
 
@@ -520,7 +537,7 @@ void FieldOfView(X86Context& ctx, uint8_t*) {
     const char* name = data ? TableName(data) : nullptr;
     bool own = mine && aim <= 1 && name && (!std::strcmp(name, "SHG") || !std::strcmp(name, "RM1"));
     if (own) {
-        bool held = G<uint8_t>(ctx.ecx + 0x105) != 0 || AimHeld();
+        bool held = G<uint8_t>(ctx.ecx + 0x105) != 0 || OwnAimHeld();
         static int last = -1, logged = 0;
         static uint32_t last_bits = 0;
         uint32_t bits = PadBits();
@@ -555,6 +572,7 @@ void FieldOfView(X86Context& ctx, uint8_t*) {
             }
         }
         g_own_aim = 0;
+        g_own_toggle = false;  // another weapon: the next SPAS 12 / Remington starts at the hip
         if (zoom <= 1.001f) g_base_fov = fov;  // not zoomed: this is the view the camera keeps
     }
     if (mine) AdsShift(data, hip);
