@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -205,6 +206,26 @@ static float Widen(uint32_t degrees) {
 
 static float g_gun = 1.0f;  // the gun's picture over the view's
 
+// ---- test log (ads_test.log): lines per site are capped, so the file stays small. Only writes, changes nothing ----
+static long DbgMs() {
+    static const auto start = std::chrono::steady_clock::now();
+    return long(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count());
+}
+static void DbgLog(const char* fmt, ...) {
+    FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/ads_test.log", "a");
+    if (!log) return;
+    va_list args;
+    va_start(args, fmt);
+    std::vfprintf(log, fmt, args);
+    va_end(args);
+    std::fclose(log);
+}
+// what the animation hook (sub_0017B130) last saw of the player's weapon clip, read by the shell birth log
+static char g_dbg_clip[16] = "-";
+static float g_dbg_t14 = 0;
+static int g_dbg_slot = -1;
+static int g_dbg_fire_frames = 0;
+
 // The gun at the aim: in the middle of the view. The game builds the first person gun's matrix once a frame
 // (player + 0x420, in view units: x left on the screen, y up, z ahead, the last row its position) and the gun's model, the
 // locators on it (muzzle flash, sparks, smoke) and the muzzle matrix of the tracers all start from it. So the move is
@@ -246,6 +267,11 @@ static const char* TableName(uint32_t data) {
 
 static void LoadAdsShifts(uint32_t data, const char* type) {
     g_ads_shifts.clear();
+    static bool tagged = false;
+    if (!tagged) {
+        tagged = true;
+        DbgLog("build: dbg2 (shell birth, fire start/end, own aim per frame)\n");
+    }
     std::ifstream f("/storage/emulated/0/Black/SaveData/ads_view.txt");
     std::string line;
     while (std::getline(f, line)) {
@@ -360,6 +386,19 @@ void ViewmodelShift(X86Context& ctx, uint8_t*) {
 // the move and the turn: 1 whole, 0 none. The first ones are written to ads_test.log
 void ShellShift(X86Context& ctx, uint8_t*) {
     uint32_t player = R32(ctx.ebp + 8);
+    {   // every birth of the player's shell, before anything is changed: how many a shot makes, from where, in which clip
+        static int births = 0;
+        if (births < 300 && player == Player()) {
+            births++;
+            uint32_t weapon = R32(Player() + kPlayerWeapon);
+            const char* wname = weapon ? TableName(R32(weapon + kWeaponData)) : nullptr;
+            const float* p0 = &G<float>(ctx.ebx + 0x40);
+            DbgLog("shell birth #%d ms=%ld rec=%08X ret=%08X weapon=%s clip=%s slot=%d t14=%.2f ffr=%d g_shell=%.2f "
+                   "vm=(%.3f %.3f %.3f) pos=(%.3f %.3f %.3f)\n",
+                   births, DbgMs(), unsigned(ctx.ebx), unsigned(R32(ctx.ebp + 4)), wname ? wname : "?", g_dbg_clip,
+                   g_dbg_slot, g_dbg_t14, g_dbg_fire_frames, g_shell, g_vm[0], g_vm[1], g_vm[2], p0[0], p0[1], p0[2]);
+        }
+    }
     static int calls = 0;
     if (calls < 4) {  // does the hook run at all, and with what: to ads_test.log
         calls++;
@@ -499,8 +538,22 @@ void FieldOfView(X86Context& ctx, uint8_t*) {
         if (g_own_aim > 0.999f) g_own_aim = 1;
         if (g_own_aim < 0.001f) g_own_aim = 0;
         hip = 1 - g_own_aim;
+        static int own_frames = 0;  // each call while the aim is held or on its way: how steady the button and the aim are
+        if ((held || g_own_aim > 0) && own_frames < 800) {
+            own_frames++;
+            DbgLog("own frame #%d ms=%ld %s held=%d pad=%08X own_aim=%.3f\n", own_frames, DbgMs(), name, int(held),
+                   unsigned(PadBits()), g_own_aim);
+        }
     } else if (mine) {
         if (aim > 1) LearnAim(G<uint8_t>(ctx.ecx + 0x105) != 0);
+        if (g_own_aim != 0) {  // something else than the SPAS 12 / Remington sends the aim back to 0
+            static int resets = 0;
+            if (resets < 100) {
+                resets++;
+                DbgLog("own aim RESET ms=%ld by weapon=%s data=%08X aim=%.2f was=%.3f\n", DbgMs(), name ? name : "?",
+                       unsigned(data), aim, g_own_aim);
+            }
+        }
         g_own_aim = 0;
         if (zoom <= 1.001f) g_base_fov = fov;  // not zoomed: this is the view the camera keeps
     }
@@ -786,6 +839,41 @@ X86_FUNC(sub_0017B130) {
     {
         uint32_t now_clip = R32(ac + kAnimClip);
         std::string clip_name = ReadCString(ac + kAnimName, 13);
+        {   // one line when a fire clip starts and one when it ends (frames it lasted): a single shot too
+            static bool in_fire = false;
+            static uint32_t fire_clip = 0;
+            static int fire_slot = -1, fire_frames = 0, fire_logs = 0;
+            static float fire_last_t14 = 0;
+            bool is_fire = now_clip && IsFireClip(clip_name);
+            int now_slot = now_clip ? int(G<int16_t>(now_clip + kAnimClipFadeSlot)) : -1;
+            if (in_fire && (!is_fire || now_clip != fire_clip || now_slot != fire_slot)) {
+                if (fire_logs < 300) {
+                    fire_logs++;
+                    DbgLog("fire end ms=%ld frames=%d last_t14=%.2f\n", DbgMs(), fire_frames, fire_last_t14);
+                }
+                in_fire = false;
+            }
+            if (is_fire) {
+                if (!in_fire) {
+                    in_fire = true;
+                    fire_clip = now_clip;
+                    fire_slot = now_slot;
+                    fire_frames = 0;
+                    if (fire_logs < 300) {
+                        fire_logs++;
+                        DbgLog("fire start ms=%ld %s slot=%d len=%.1f kick0=%d aim=%d\n", DbgMs(), clip_name.c_str(),
+                               now_slot, G<float>(now_clip + 0x1C), int(KickOff()),
+                               int(g_vm[0] != 0 || g_vm[1] != 0 || g_vm[2] != 0));
+                    }
+                }
+                fire_frames++;
+                fire_last_t14 = G<float>(now_clip + 0x14);
+            }
+            std::snprintf(g_dbg_clip, sizeof(g_dbg_clip), "%s", is_fire ? clip_name.c_str() : "-");
+            g_dbg_t14 = now_clip ? G<float>(now_clip + 0x14) : 0;
+            g_dbg_slot = now_slot;
+            g_dbg_fire_frames = in_fire ? fire_frames : 0;
+        }
         if (now_clip && IsFireClip(clip_name)) {
             static std::map<std::string, int> seen;  // the first frames of each fire clip to ads_test.log
             int& n = seen[clip_name];
