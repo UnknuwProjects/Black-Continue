@@ -212,7 +212,7 @@ static float g_gun = 1.0f;  // the gun's picture over the view's
 // (ALL for any type not named). dx, dy and dz in view units: the matrix's x axis points to the LEFT of the screen, so
 // a positive dx moves the gun left, a positive dy up, a positive dz away from the eye. yaw and pitch in degrees turn
 // the gun around a point ahead of the eye: a positive yaw turns its muzzle to the left, a positive pitch up. shell
-// 1 (or left out) moves the casings with the gun, 0 leaves them. All after dy may be left out. E.g. "ALL 0.10 0.03",
+// 1 (or left out) moves the casings with the gun, 0 leaves them, in between a part of it. All after dy may be left out. E.g. "ALL 0.10 0.03",
 // "ASR 0.10 0.03 0 4 0"
 struct AdsMove {
     float v[6] = {0, 0, 0, 0, 0, 1};
@@ -305,26 +305,40 @@ void ViewmodelShift(X86Context& ctx, uint8_t*) {
 }
 
 // A shell casing is born (0x163655, ebx its record in the pool, the function's first argument the player). It was
-// made from the gun's locator before the aim's move reached it, so the move is added to its position here, along the
-// view's axes. The first ones are written to ads_test.log, to see what space the position is in
+// made from the gun's locator before the aim's move reached it. Its position is small numbers (about -0.07 -0.08 0.25
+// in the log, the eye is far off in the world), so it is in the gun's own space, not the world's: the aim's turn and
+// move are added to it as they are to the gun's matrix, not along the camera's axes. shell in ads_view.txt scales
+// the move and the turn: 1 whole, 0 none. The first ones are written to ads_test.log
 void ShellShift(X86Context& ctx, uint8_t*) {
     uint32_t player = R32(ctx.ebp + 8);
-    if (player != Player() || g_shell == 0 || (!g_vm[0] && !g_vm[1] && !g_vm[2])) return;
-    const float* right = &G<float>(player + kPlayerRight);
-    const float* up = &G<float>(player + kPlayerUp);
-    const float* forward = &G<float>(player + kPlayerForward);
+    if (player != Player() || g_shell == 0 || (!g_vm[0] && !g_vm[1] && !g_vm[2] && !g_vm[3] && !g_vm[4])) return;
     float* pos = &G<float>(ctx.ebx + 0x40);
-    const float* eye = &G<float>(player + 0x100);
+    float before[3] = {pos[0], pos[1], pos[2]};
+    constexpr float kPi = 3.14159265f;
+    constexpr float kPivot = 0.6f;
+    float yaw = g_vm[3] * g_shell * kPi / 180, pitch = g_vm[4] * g_shell * kPi / 180;
+    if (yaw != 0 || pitch != 0) {
+        float cy = std::cos(yaw), sy = std::sin(yaw), cp = std::cos(pitch), sp = std::sin(pitch);
+        float z0 = pos[2] - kPivot;
+        float x = pos[0] * cy + z0 * sy;
+        float z = -pos[0] * sy + z0 * cy;
+        float y = pos[1] * cp + z * sp;
+        z = -pos[1] * sp + z * cp;
+        pos[0] = x;
+        pos[1] = y;
+        pos[2] = z + kPivot;
+    }
+    for (int i = 0; i < 3; i++) pos[i] += g_shell * g_vm[i];
     static int logged = 0;
     if (logged < 6) {
         logged++;
         if (FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/ads_test.log", "a")) {
-            std::fprintf(log, "shell: pos=(%.3f %.3f %.3f) eye=(%.3f %.3f %.3f) move=(%.3f %.3f %.3f)\n", pos[0], pos[1],
-                         pos[2], eye[0], eye[1], eye[2], g_vm[0], g_vm[1], g_vm[2]);
+            std::fprintf(log, "shell: pos=(%.3f %.3f %.3f) -> (%.3f %.3f %.3f) move=(%.3f %.3f %.3f) turn=(%.2f %.2f)\n",
+                         before[0], before[1], before[2], pos[0], pos[1], pos[2], g_vm[0], g_vm[1], g_vm[2], g_vm[3],
+                         g_vm[4]);
             std::fclose(log);
         }
     }
-    for (int i = 0; i < 3; i++) pos[i] += g_shell * (g_vm[0] * right[i] + g_vm[1] * up[i] + g_vm[2] * forward[i]);
 }
 
 // Is the gun's picture anywhere but where the game puts it: grown by the viewmodel setting or moved by the aim
