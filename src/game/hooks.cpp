@@ -863,6 +863,26 @@ static bool OwnIdleHold() {
     return name && (!std::strcmp(name, "SHG") || !std::strcmp(name, "RM1"));
 }
 
+// EXPERIMENT: which times of a fire clip kick 0 holds, read from kick_probe.txt beside ads_view.txt (one number, a sum:
+// 1 = +0x14, 2 = +0x18, 4 = +0x20, 8 = +0x24; none or unreadable: 3, as before). Read again every 2 seconds or so
+static uint32_t KickProbeMask() {
+    static uint32_t mask = 3;
+    static int tick = 0;
+    if (tick++ % 120 == 0) {
+        uint32_t now = 3;
+        if (FILE* f = std::fopen("/storage/emulated/0/Black/SaveData/kick_probe.txt", "r")) {
+            unsigned v = 0;
+            if (std::fscanf(f, "%u", &v) == 1) now = v & 15;
+            std::fclose(f);
+        }
+        if (now != mask) {
+            mask = now;
+            DbgLog("kick probe mask=%u\n", mask);
+        }
+    }
+    return mask;
+}
+
 // A fire clip that ends before the wait does hands over to the idle early: the request would start it again.
 // An idle fading in over a looping fire clip holds it still instead of running it into its next shot
 X86_EXTERN_FUNC(__imp__sub_0017B130);
@@ -875,17 +895,34 @@ X86_FUNC(sub_0017B130) {
     uint32_t fade = clip + kAnimClipFades + slot * kFadeSize;
     // kick in ads_view.txt, 0: the pose of a fire clip stands at its first frame, the gun does not come back at a shot.
     // The controller keeps the clip's real time: put back before each update, held again after it
-    static uint32_t held_ac = 0, held_clip = 0;
-    static float real_time[2];
+    static const uint32_t kProbeAt[4] = {0x14, 0x18, 0x20, 0x24};
+    static uint32_t held_ac = 0, held_clip = 0, held_mask = 0, held_call = 0, calls = 0;
+    static float real_time[4];
+    static float frozen[4];
+    static uint32_t frozen_clip = 0;
+    calls++;
     if (held_ac == ac && held_clip == clip) {
-        G<float>(clip + 0x14) = real_time[0];
-        G<float>(clip + 0x18) = real_time[1];
+        for (int i = 0; i < 4; i++)
+            if (held_mask & (1u << i)) G<float>(clip + kProbeAt[i]) = real_time[i];
     }
     held_clip = 0;
     __imp__sub_0017B130(ctx, base);
     {
         uint32_t now_clip = R32(ac + kAnimClip);
         std::string clip_name = ReadCString(ac + kAnimName, 13);
+        {   // every change of the player's clip, with the weapon's state and the aim: to find the idle clip
+            static std::string last_name;
+            static int change_logs = 0;
+            if (clip_name != last_name && change_logs < 300) {
+                change_logs++;
+                last_name = clip_name;
+                uint32_t w = R32(Player() + kPlayerWeapon);
+                const char* wn = w ? TableName(R32(w + kWeaponData)) : nullptr;
+                DbgLog("clip %s weapon=%s state=%u own_aim=%.2f t14=%.2f len=%.1f\n", clip_name.c_str(), wn ? wn : "-",
+                       w ? R32(w + kWeaponState) : 0u, g_own_aim_pub.load(), now_clip ? G<float>(now_clip + 0x14) : 0.f,
+                       now_clip ? G<float>(now_clip + 0x1C) : 0.f);
+            }
+        }
         {   // one line when a fire clip starts and one when it ends (frames it lasted): a single shot too
             static bool in_fire = false;
             static uint32_t fire_clip = 0;
@@ -935,12 +972,23 @@ X86_FUNC(sub_0017B130) {
                 }
             }
             if (KickOff()) {
+                uint32_t mask = KickProbeMask();
+                // a shot's first frame sets what is held: 0 for +0x14 and +0x18, the time it had for +0x20 and +0x24
+                bool again = held_ac == ac && held_call + 1 == calls && frozen_clip == now_clip;
+                if (!again) {
+                    frozen_clip = now_clip;
+                    frozen[0] = frozen[1] = 0;
+                    frozen[2] = G<float>(now_clip + 0x20);
+                    frozen[3] = G<float>(now_clip + 0x24);
+                }
                 held_ac = ac;
                 held_clip = now_clip;
-                real_time[0] = G<float>(now_clip + 0x14);
-                real_time[1] = G<float>(now_clip + 0x18);
-                G<float>(now_clip + 0x14) = 0;
-                G<float>(now_clip + 0x18) = 0;
+                held_mask = mask;
+                held_call = calls;
+                for (int i = 0; i < 4; i++) {
+                    real_time[i] = G<float>(now_clip + kProbeAt[i]);
+                    if (mask & (1u << i)) G<float>(now_clip + kProbeAt[i]) = frozen[i];
+                }
             }
         }
         {   // idle hold at the aim of the SPAS 12 / Remington
