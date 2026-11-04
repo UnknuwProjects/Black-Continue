@@ -1,5 +1,6 @@
 // Hooks for default.xbe
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdarg>
@@ -521,6 +522,14 @@ static bool OwnAimHeld() {
 
 static float g_base_fov = 0;  // the game's own view at the hip, kept to hold the camera at the aim
 static float g_own_aim = 0;   // the aim of the weapons the game gives none (SPAS 12, Remington): 0 hip .. 1 aimed
+static std::atomic<float> g_own_aim_pub{0};  // the same, for gyro.cpp (another thread)
+// SPAS 12 / Remington: how much the view closes in at the aim, as a weapon with a zoom of its own (the pistol's) does.
+// A guess until ads_test.log shows the pistol's value ("aim zoom PST=")
+constexpr float kOwnAimZoom = 1.15f;
+namespace game {
+// true while the SPAS 12 / Remington aim is on its way in or in: gyro.cpp's WHILE AIMING reads it
+bool OwnAiming() { return g_own_aim_pub.load() > 0.5f; }
+}
 
 // The view of play, 70 over the zoom: the setting from the hip, the game's own once the aim is in.
 // ecx the weapon, xmm0 its zoom, xmm1 the view. Scripted cameras write theirs after this.
@@ -554,6 +563,7 @@ void FieldOfView(X86Context& ctx, uint8_t*) {
         g_own_aim += ((held ? 1.0f : 0.0f) - g_own_aim) * (1 - std::pow(0.75f, FrameShare()));
         if (g_own_aim > 0.999f) g_own_aim = 1;
         if (g_own_aim < 0.001f) g_own_aim = 0;
+        g_own_aim_pub = g_own_aim;
         hip = 1 - g_own_aim;
         static int own_frames = 0;  // each call while the aim is held or on its way: how steady the button and the aim are
         if ((held || g_own_aim > 0) && own_frames < 800) {
@@ -563,6 +573,13 @@ void FieldOfView(X86Context& ctx, uint8_t*) {
         }
     } else if (mine) {
         if (aim > 1) LearnAim(G<uint8_t>(ctx.ecx + 0x105) != 0);
+        if (name) {  // each weapon's zoom once, to compare with kOwnAimZoom
+            static std::map<std::string, bool> zoom_logged;
+            if (!zoom_logged[name] && zoom_logged.size() <= 24) {
+                zoom_logged[name] = true;
+                DbgLog("aim zoom %s=%.3f\n", name, aim);
+            }
+        }
         if (g_own_aim != 0) {  // something else than the SPAS 12 / Remington sends the aim back to 0
             static int resets = 0;
             if (resets < 100) {
@@ -572,10 +589,12 @@ void FieldOfView(X86Context& ctx, uint8_t*) {
             }
         }
         g_own_aim = 0;
+        g_own_aim_pub = 0;
         g_own_toggle = false;  // another weapon: the next SPAS 12 / Remington starts at the hip
         if (zoom <= 1.001f) g_base_fov = fov;  // not zoomed: this is the view the camera keeps
     }
     if (mine) AdsShift(data, hip);
+    if (own) fov /= 1 + (kOwnAimZoom - 1) * g_own_aim;  // the view closes in by degrees, as the game's 70 over the zoom
     float keep = 0;
     if (mine && !own && g_cam != 0 && zoom > 1.001f) {
         keep = std::clamp(g_cam, 0.0f, 1.0f);
@@ -834,6 +853,16 @@ static bool KickOff() {
     return row && row->v[8] <= 0;
 }
 
+// SPAS 12 / Remington at the aim: the idle clip stands where it was when the aim came in (the other weapons have none at
+// the aim). EXPERIMENT: weapon state 1 is taken for ready, +0x14 / +0x18 for the clip's time: both unverified, see
+// the "idle hold" lines of ads_test.log
+static bool OwnIdleHold() {
+    uint32_t weapon = R32(Player() + kPlayerWeapon);
+    if (!weapon || R32(weapon + kWeaponState) != 1 || g_own_aim_pub.load() <= 0.5f) return false;
+    const char* name = TableName(R32(weapon + kWeaponData));
+    return name && (!std::strcmp(name, "SHG") || !std::strcmp(name, "RM1"));
+}
+
 // A fire clip that ends before the wait does hands over to the idle early: the request would start it again.
 // An idle fading in over a looping fire clip holds it still instead of running it into its next shot
 X86_EXTERN_FUNC(__imp__sub_0017B130);
@@ -912,6 +941,27 @@ X86_FUNC(sub_0017B130) {
                 real_time[1] = G<float>(now_clip + 0x18);
                 G<float>(now_clip + 0x14) = 0;
                 G<float>(now_clip + 0x18) = 0;
+            }
+        }
+        {   // idle hold at the aim of the SPAS 12 / Remington
+            static uint32_t idle_clip = 0;
+            static float idle_time[2];
+            static int idle_logs = 0;
+            if (now_clip && !IsFireClip(clip_name) && OwnIdleHold()) {
+                if (idle_clip != now_clip) {
+                    idle_clip = now_clip;
+                    idle_time[0] = G<float>(now_clip + 0x14);
+                    idle_time[1] = G<float>(now_clip + 0x18);
+                    if (idle_logs < 40) {
+                        idle_logs++;
+                        DbgLog("idle hold %s t14=%.2f t18=%.2f len=%.1f\n", clip_name.c_str(), idle_time[0], idle_time[1],
+                               G<float>(now_clip + 0x1C));
+                    }
+                }
+                G<float>(now_clip + 0x14) = idle_time[0];
+                G<float>(now_clip + 0x18) = idle_time[1];
+            } else {
+                idle_clip = 0;
             }
         }
     }
