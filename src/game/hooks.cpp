@@ -864,12 +864,12 @@ static bool OwnIdleHold() {
 }
 
 // EXPERIMENT: which times of a fire clip kick 0 holds, read from kick_probe.txt beside ads_view.txt (one number, a sum:
-// 1 = +0x14, 2 = +0x18, 4 = +0x20, 8 = +0x24; none or unreadable: 3, as before). Read again every 2 seconds or so
+// 1 = +0x14, 2 = +0x18, 4 = +0x20, 8 = +0x24; none or unreadable: 15, since the shells came one a frame with +0x14 held alone). Read again every 2 seconds or so
 static uint32_t KickProbeMask() {
-    static uint32_t mask = 3;
+    static uint32_t mask = 15;
     static int tick = 0;
     if (tick++ % 120 == 0) {
-        uint32_t now = 3;
+        uint32_t now = 15;
         if (FILE* f = std::fopen("/storage/emulated/0/Black/SaveData/kick_probe.txt", "r")) {
             unsigned v = 0;
             if (std::fscanf(f, "%u", &v) == 1) now = v & 15;
@@ -913,7 +913,10 @@ X86_FUNC(sub_0017B130) {
         {   // every change of the player's clip, with the weapon's state and the aim: to find the idle clip
             static std::string last_name;
             static int change_logs = 0;
-            if (clip_name != last_name && change_logs < 300) {
+            bool spam = clip_name.size() >= 5 && (clip_name.compare(clip_name.size() - 5, 5, "S_100") == 0 ||
+                                                  clip_name.compare(clip_name.size() - 5, 5, "S_190") == 0 ||
+                                                  clip_name.compare(clip_name.size() - 5, 5, "S_110") == 0);
+            if (clip_name != last_name && !spam && change_logs < 1500) {
                 change_logs++;
                 last_name = clip_name;
                 uint32_t w = R32(Player() + kPlayerWeapon);
