@@ -404,6 +404,63 @@ static bool GunMoved() {
     return g_gun != 1 || (g_effect != 0 && (g_shift[0] || g_shift[1] || g_shift[2] || g_shift[3]));
 }
 
+// The pad as bits: the buttons, then the analog buttons (triggers...) past a light press, any pad
+static uint32_t PadBits() {
+    uint32_t bits = 0;
+    for (int port = 0; port < 4; port++) {
+        input::Pad pad = input::Poll(port);
+        bits |= uint32_t(pad.buttons) & 0xFFFF;
+        for (size_t i = 0; i < sizeof(pad.analog) / sizeof(pad.analog[0]) && i < 16; i++)
+            if (pad.analog[i] > 30) bits |= 1u << (16 + i);
+    }
+    return bits;
+}
+
+// The weapons without zoom never get the game's aim byte, so the aim is read from the pad. Which bit of it is the aim is
+// learned from the weapons that have one: the bit that is down when the game's aim byte is set and up when it is not.
+// Kept in ads_aim.txt, a number, delete the file to learn again
+static uint32_t g_aim_bit = 0;
+static const char* const kAimFile = "/storage/emulated/0/Black/SaveData/ads_aim.txt";
+
+static void LearnAim(bool held) {
+    static int held_frames = 0, free_frames = 0, held_with[32] = {}, free_with[32] = {};
+    if (g_aim_bit) return;
+    uint32_t bits = PadBits();
+    (held ? held_frames : free_frames)++;
+    for (int b = 0; b < 32; b++)
+        if (bits >> b & 1) (held ? held_with : free_with)[b]++;
+    if (held_frames < 30 || free_frames < 30) return;
+    int best = -1;
+    float best_score = 0.8f;
+    for (int b = 0; b < 32; b++) {
+        float score = float(held_with[b]) / held_frames - float(free_with[b]) / free_frames;
+        if (score > best_score) best = b, best_score = score;
+    }
+    if (best < 0) return;
+    g_aim_bit = 1u << best;
+    if (FILE* f = std::fopen(kAimFile, "w")) {
+        std::fprintf(f, "%u\n", unsigned(g_aim_bit));
+        std::fclose(f);
+    }
+    if (FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/ads_test.log", "a")) {
+        std::fprintf(log, "aim learned: pad bit %d (score %.2f)\n", best, best_score);
+        std::fclose(log);
+    }
+}
+
+static bool AimHeld() {
+    static bool loaded = false;
+    if (!loaded) {
+        loaded = true;
+        unsigned v = 0;
+        if (FILE* f = std::fopen(kAimFile, "r")) {
+            if (std::fscanf(f, "%u", &v) == 1) g_aim_bit = v;
+            std::fclose(f);
+        }
+    }
+    return g_aim_bit && (PadBits() & g_aim_bit);
+}
+
 static float g_base_fov = 0;  // the game's own view at the hip, kept to hold the camera at the aim
 static float g_own_aim = 0;   // the aim of the weapons the game gives none (SPAS 12, Remington): 0 hip .. 1 aimed
 
@@ -422,13 +479,17 @@ void FieldOfView(X86Context& ctx, uint8_t*) {
     const char* name = data ? TableName(data) : nullptr;
     bool own = mine && aim <= 1 && name && (!std::strcmp(name, "SHG") || !std::strcmp(name, "RM1"));
     if (own) {
-        bool held = G<uint8_t>(ctx.ecx + 0x105) != 0;
+        bool held = G<uint8_t>(ctx.ecx + 0x105) != 0 || AimHeld();
         static int last = -1, logged = 0;
-        if (last != int(held) && logged < 20) {  // does the aim button reach this weapon: to ads_test.log
+        static uint32_t last_bits = 0;
+        uint32_t bits = PadBits();
+        if ((last != int(held) || bits != last_bits) && logged < 40) {  // what the pad does at this weapon: to ads_test.log
             last = held;
+            last_bits = bits;
             logged++;
             if (FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/ads_test.log", "a")) {
-                std::fprintf(log, "own aim: %s byte105=%u\n", name, unsigned(G<uint8_t>(ctx.ecx + 0x105)));
+                std::fprintf(log, "own aim: %s held=%d byte105=%u pad=%08X aim_bit=%08X\n", name, int(held),
+                             unsigned(G<uint8_t>(ctx.ecx + 0x105)), unsigned(bits), unsigned(g_aim_bit));
                 std::fclose(log);
             }
         }
@@ -437,6 +498,7 @@ void FieldOfView(X86Context& ctx, uint8_t*) {
         if (g_own_aim < 0.001f) g_own_aim = 0;
         hip = 1 - g_own_aim;
     } else if (mine) {
+        if (aim > 1) LearnAim(G<uint8_t>(ctx.ecx + 0x105) != 0);
         g_own_aim = 0;
         if (zoom <= 1.001f) g_base_fov = fov;  // not zoomed: this is the view the camera keeps
     }
@@ -699,6 +761,26 @@ X86_FUNC(sub_0017B130) {
     int16_t slot = G<int16_t>(clip + kAnimClipFadeSlot);
     uint32_t fade = clip + kAnimClipFades + slot * kFadeSize;
     __imp__sub_0017B130(ctx, base);
+    {  // what a fire clip is made of, for the recoil animation: the first frames of a burst to ads_test.log
+        static int logged = 0, frame = 0;
+        std::string clip_name = ReadCString(ac + kAnimName, 13);
+        if (logged < 90 && IsFireClip(clip_name)) {
+            logged++;
+            if (FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/ads_test.log", "a")) {
+                int16_t now_slot = G<int16_t>(clip + kAnimClipFadeSlot);
+                uint32_t f = clip + kAnimClipFades + now_slot * kFadeSize;
+                std::fprintf(log, "fire clip %s #%d slot=%d from=%08X\n", clip_name.c_str(), frame++, now_slot, unsigned(from));
+                std::fprintf(log, "  fade:");
+                for (int i = 0; i < 10; i++) std::fprintf(log, " %08X", unsigned(R32(f + i * 4)));
+                std::fprintf(log, "\n  clip+10:");
+                for (int i = 0; i < 12; i++) std::fprintf(log, " %08X", unsigned(R32(clip + 0x10 + i * 4)));
+                std::fprintf(log, "\n  ac+90:");
+                for (int i = 0; i < 8; i++) std::fprintf(log, " %08X", unsigned(R32(ac + 0x90 + i * 4)));
+                std::fprintf(log, "\n");
+                std::fclose(log);
+            }
+        }
+    }
     if (G<int16_t>(clip + kAnimClipFadeSlot) == slot || FrameShare() >= 1) return;
     uint32_t weapon = R32(R32(ac + kAnimOwner) + kPlayerWeapon);
     if (weapon && R32(weapon + kWeaponState) == 1) {
