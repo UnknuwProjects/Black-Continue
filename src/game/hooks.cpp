@@ -858,26 +858,32 @@ static bool KickOff() {
 // the "idle hold" lines of ads_test.log
 static bool OwnIdleHold() {
     uint32_t weapon = R32(Player() + kPlayerWeapon);
-    if (!weapon || R32(weapon + kWeaponState) != 1 || g_own_aim_pub.load() <= 0.5f) return false;
+    if (!weapon || R32(weapon + kWeaponState) != 0 || g_own_aim_pub.load() <= 0.5f) return false;
     const char* name = TableName(R32(weapon + kWeaponData));
     return name && (!std::strcmp(name, "SHG") || !std::strcmp(name, "RM1"));
 }
 
 // EXPERIMENT: which times of a fire clip kick 0 holds, read from kick_probe.txt beside ads_view.txt (one number, a sum:
 // 1 = +0x14, 2 = +0x18, 4 = +0x20, 8 = +0x24; none or unreadable: 15, since the shells came one a frame with +0x14 held alone). Read again every 2 seconds or so
+static float g_kick_pin = 0;  // the frame +0x14 and +0x18 are held at: the second number of kick_probe.txt
 static uint32_t KickProbeMask() {
     static uint32_t mask = 15;
     static int tick = 0;
     if (tick++ % 120 == 0) {
         uint32_t now = 15;
+        float pin = 0;
         if (FILE* f = std::fopen("/storage/emulated/0/Black/SaveData/kick_probe.txt", "r")) {
             unsigned v = 0;
-            if (std::fscanf(f, "%u", &v) == 1) now = v & 15;
+            float p = 0;
+            int n = std::fscanf(f, "%u %f", &v, &p);
+            if (n >= 1) now = v & 15;
+            if (n >= 2 && p >= 0 && p < 60) pin = p;
             std::fclose(f);
         }
-        if (now != mask) {
+        if (now != mask || pin != g_kick_pin) {
             mask = now;
-            DbgLog("kick probe mask=%u\n", mask);
+            g_kick_pin = pin;
+            DbgLog("kick probe mask=%u pin=%.2f\n", mask, pin);
         }
     }
     return mask;
@@ -980,7 +986,7 @@ X86_FUNC(sub_0017B130) {
                 bool again = held_ac == ac && held_call + 1 == calls && frozen_clip == now_clip;
                 if (!again) {
                     frozen_clip = now_clip;
-                    frozen[0] = frozen[1] = 0;
+                    frozen[0] = frozen[1] = g_kick_pin;
                     frozen[2] = G<float>(now_clip + 0x20);
                     frozen[3] = G<float>(now_clip + 0x24);
                 }
@@ -998,11 +1004,12 @@ X86_FUNC(sub_0017B130) {
             static uint32_t idle_clip = 0;
             static float idle_time[2];
             static int idle_logs = 0;
-            if (now_clip && !IsFireClip(clip_name) && OwnIdleHold()) {
+            bool idle_name = clip_name.size() >= 5 && clip_name.compare(clip_name.size() - 5, 5, "S_001") == 0;
+            if (now_clip && idle_name && OwnIdleHold()) {
                 if (idle_clip != now_clip) {
                     idle_clip = now_clip;
-                    idle_time[0] = G<float>(now_clip + 0x14);
-                    idle_time[1] = G<float>(now_clip + 0x18);
+                    idle_time[0] = 0;  // the first frame: the hand on the gun
+                    idle_time[1] = 0;
                     if (idle_logs < 40) {
                         idle_logs++;
                         DbgLog("idle hold %s t14=%.2f t18=%.2f len=%.1f\n", clip_name.c_str(), idle_time[0], idle_time[1],
