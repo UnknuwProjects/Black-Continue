@@ -217,7 +217,7 @@ static float g_gun = 1.0f;  // the gun's picture over the view's
 // 1 (or left out) moves the casings with the gun, 0 leaves them, in between a part of it. All after dy may be left out. E.g. "ALL 0.10 0.03",
 // "ASR 0.10 0.03 0 4 0"
 struct AdsMove {
-    float v[8] = {0, 0, 0, 0, 0, 1, 0, 1};  // dx dy dz yaw pitch shell cam recoil
+    float v[9] = {0, 0, 0, 0, 0, 1, 0, 1, 1};  // dx dy dz yaw pitch shell cam recoil kick
 };
 static std::map<std::string, AdsMove> g_ads_shifts;
 static time_t g_ads_stamp = -1;  // the file's change time when it was read
@@ -253,7 +253,7 @@ static void LoadAdsShifts(uint32_t data, const char* type) {
         std::string name;
         AdsMove m;
         if (!(in >> name >> m.v[0] >> m.v[1])) continue;
-        for (int i = 2; i < 8; i++) {
+        for (int i = 2; i < 9; i++) {
             float t;
             if (!(in >> t)) break;
             m.v[i] = t;
@@ -458,7 +458,9 @@ static bool AimHeld() {
             std::fclose(f);
         }
     }
-    return g_aim_bit && (PadBits() & g_aim_bit);
+    // not learned (yet): the right stick click, the only bit that moved with the aim button on the SPAS 12 and Remington
+    uint32_t bit = g_aim_bit ? g_aim_bit : 0x80;
+    return (PadBits() & bit) != 0;
 }
 
 static float g_base_fov = 0;  // the game's own view at the hip, kept to hold the camera at the aim
@@ -750,6 +752,17 @@ static bool IsFireClip(const std::string& name) {
     return fired;
 }
 
+// the player's weapon has kick 0 in ads_view.txt (not the RPG and the Walther, left as the game has them)
+static bool KickOff() {
+    uint32_t weapon = R32(Player() + kPlayerWeapon);
+    if (!weapon) return false;
+    uint32_t data = R32(weapon + kWeaponData);
+    const char* name = TableName(data);
+    if (name && (!std::strcmp(name, "RPG") || !std::strcmp(name, "SNR"))) return false;
+    const AdsMove* row = AdsRow(data);
+    return row && row->v[8] <= 0;
+}
+
 // A fire clip that ends before the wait does hands over to the idle early: the request would start it again.
 // An idle fading in over a looping fire clip holds it still instead of running it into its next shot
 X86_EXTERN_FUNC(__imp__sub_0017B130);
@@ -760,24 +773,39 @@ X86_FUNC(sub_0017B130) {
     if (R32(ac + kAnimOwner) != Player() || !clip) return __imp__sub_0017B130(ctx, base);
     int16_t slot = G<int16_t>(clip + kAnimClipFadeSlot);
     uint32_t fade = clip + kAnimClipFades + slot * kFadeSize;
+    // kick in ads_view.txt, 0: the pose of a fire clip stands at its first frame, the gun does not come back at a shot.
+    // The controller keeps the clip's real time: put back before each update, held again after it
+    static uint32_t held_ac = 0, held_clip = 0;
+    static float real_time[2];
+    if (held_ac == ac && held_clip == clip) {
+        G<float>(clip + 0x14) = real_time[0];
+        G<float>(clip + 0x18) = real_time[1];
+    }
+    held_clip = 0;
     __imp__sub_0017B130(ctx, base);
-    {  // what a fire clip is made of, for the recoil animation: the first frames of a burst to ads_test.log
-        static int logged = 0, frame = 0;
+    {
+        uint32_t now_clip = R32(ac + kAnimClip);
         std::string clip_name = ReadCString(ac + kAnimName, 13);
-        if (logged < 90 && IsFireClip(clip_name)) {
-            logged++;
-            if (FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/ads_test.log", "a")) {
-                int16_t now_slot = G<int16_t>(clip + kAnimClipFadeSlot);
-                uint32_t f = clip + kAnimClipFades + now_slot * kFadeSize;
-                std::fprintf(log, "fire clip %s #%d slot=%d from=%08X\n", clip_name.c_str(), frame++, now_slot, unsigned(from));
-                std::fprintf(log, "  fade:");
-                for (int i = 0; i < 10; i++) std::fprintf(log, " %08X", unsigned(R32(f + i * 4)));
-                std::fprintf(log, "\n  clip+10:");
-                for (int i = 0; i < 12; i++) std::fprintf(log, " %08X", unsigned(R32(clip + 0x10 + i * 4)));
-                std::fprintf(log, "\n  ac+90:");
-                for (int i = 0; i < 8; i++) std::fprintf(log, " %08X", unsigned(R32(ac + 0x90 + i * 4)));
-                std::fprintf(log, "\n");
-                std::fclose(log);
+        if (now_clip && IsFireClip(clip_name)) {
+            static std::map<std::string, int> seen;  // the first frames of each fire clip to ads_test.log
+            int& n = seen[clip_name];
+            if (n < 12 && seen.size() <= 24) {
+                n++;
+                if (FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/ads_test.log", "a")) {
+                    std::fprintf(log, "fire clip %s #%d slot=%d t14=%.2f t18=%.2f len=%.1f t20=%.3f t24=%.3f\n",
+                                 clip_name.c_str(), n, int(G<int16_t>(now_clip + kAnimClipFadeSlot)),
+                                 G<float>(now_clip + 0x14), G<float>(now_clip + 0x18), G<float>(now_clip + 0x1C),
+                                 G<float>(now_clip + 0x20), G<float>(now_clip + 0x24));
+                    std::fclose(log);
+                }
+            }
+            if (KickOff()) {
+                held_ac = ac;
+                held_clip = now_clip;
+                real_time[0] = G<float>(now_clip + 0x14);
+                real_time[1] = G<float>(now_clip + 0x18);
+                G<float>(now_clip + 0x14) = 0;
+                G<float>(now_clip + 0x18) = 0;
             }
         }
     }
