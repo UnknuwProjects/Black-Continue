@@ -17,6 +17,10 @@
 #include "core/log.h"
 #include "host.h"
 
+namespace game {
+bool OwnAiming();  // hooks.cpp: the SPAS 12 / Remington have no game zoom, their aim is made there
+}
+
 namespace gyro {
 
 namespace {
@@ -74,7 +78,7 @@ bool AimActive() {
         releasing = false;
     }
     prev = z;
-    return z < kAimingZoom && !releasing;
+    return (z < kAimingZoom && !releasing) || game::OwnAiming();
 }
 
 SDL_SensorID FindGyro() {
