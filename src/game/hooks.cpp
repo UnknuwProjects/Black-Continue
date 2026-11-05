@@ -284,7 +284,7 @@ static void LoadAdsShifts(uint32_t data, const char* type) {
     static bool tagged = false;
     if (!tagged) {
         tagged = true;
-        DbgLog("build: dbg9 (as dbg8, plus tree_<weapon>.log: the node tree of the fire clip, one file per weapon)\n");
+        DbgLog("build: dbg10 (as dbg9, tree dump fixed + leaf data block, c9 log of sub_0009C0C0, bone_hold.txt)\n");
     }
     std::ifstream f("/storage/emulated/0/Black/SaveData/ads_view.txt");
     std::string line;
@@ -950,10 +950,11 @@ static void AimPinRefresh() {
 static uint32_t g_kick_ac = 0;  // the player's animation controller, noted by sub_0017B130
 static bool g_fetch_active = false;
 static std::string g_fetch_tag;  // WEAPON_clipname of the fire clip being sampled, for the tree file
-// DIAGNOSIS: the node tree the pose is read from, to see whether the recoil and the belt are apart in it. 0x98450 hands the
-// node to a handler by its type (the low six bits of its first byte); type 2 is a sequence: a count at byte 1 and the children
-// from +0x10, each with its own duration, the one that holds the time gets the rest of it. The other types are not read yet,
-// so every node is written as raw words, and each word that points near the clip object is followed. One file per weapon.
+// DIAGNOSIS: the node tree the pose is read from. 0x98450 hands the node to a handler by its type (low six bits of byte 0).
+// Type 2 is a sequence (count at byte 1, children from +0x10). Type 22 (0x9B000) is a leaf: its data block is at +0x10, the
+// block holds a list of events (count at +0x24, list at +0x28, 16 bytes each, a time first) and the keyframes. Every node is
+// written as raw words, each word that points within 1 MB of the node is followed (dbg9 measured from the clip: a miss).
+static bool OkPtr(uint32_t p, uint32_t len) { return p && !(p & 3) && p >= 0x80000000u && p + len < 0x84000000u; }
 static void TreeDump(const std::string& tag, uint32_t clip, uint32_t root) {
     std::string path = std::string("/storage/emulated/0/Black/SaveData/tree_") + tag + ".log";
     FILE* f = std::fopen(path.c_str(), "w");
@@ -965,22 +966,41 @@ static void TreeDump(const std::string& tag, uint32_t clip, uint32_t root) {
     std::vector<std::pair<uint32_t, int>> todo;
     todo.push_back({root, 0});
     int nodes = 0;
-    while (!todo.empty() && nodes < 150) {
+    while (!todo.empty() && nodes < 60) {
         uint32_t a = todo.back().first;
         int d = todo.back().second;
         todo.pop_back();
-        if (!seen.insert(a).second) continue;
+        if (!OkPtr(a, 64) || !seen.insert(a).second) continue;
         nodes++;
         uint32_t w[16];
         for (int i = 0; i < 16; i++) w[i] = R32(a + 4 * i);
         std::fprintf(f, "%*snode %08X d=%d type=%u b1=%d:", d * 2, "", a, d, w[0] & 0x3F, int(int8_t(w[0] >> 8)));
         for (int i = 0; i < 16; i++) std::fprintf(f, " %08X", w[i]);
         std::fprintf(f, "\n");
+        if ((w[0] & 0x3F) == 22) {   // a leaf: its data block (+0x10) and the block of +0x08
+            if (OkPtr(w[4], 256)) {
+                std::fprintf(f, "%*sdata block %08X (+0x10), 64 words:", d * 2, "", w[4]);
+                for (int i = 0; i < 64; i++) std::fprintf(f, "%s%08X", (i % 8) ? " " : "\n  ", R32(w[4] + 4 * i));
+                std::fprintf(f, "\n");
+                uint32_t cnt = R32(w[4] + 0x24), lst = R32(w[4] + 0x28);
+                if (cnt >= 1 && cnt <= 64 && OkPtr(lst, cnt * 16)) {
+                    std::fprintf(f, "%*sevent list %08X count %u (4 words each, time first):\n", d * 2, "", lst, cnt);
+                    for (uint32_t i = 0; i < cnt && i < 24; i++)
+                        std::fprintf(f, "%*s  %08X %08X %08X %08X  t=%.3f\n", d * 2, "", R32(lst + 16 * i), R32(lst + 16 * i + 4),
+                                     R32(lst + 16 * i + 8), R32(lst + 16 * i + 12), G<float>(lst + 16 * i));
+                }
+            }
+            if (OkPtr(w[2], 128)) {
+                std::fprintf(f, "%*sblock %08X (+0x08), 32 words:", d * 2, "", w[2]);
+                for (int i = 0; i < 32; i++) std::fprintf(f, "%s%08X", (i % 8) ? " " : "\n  ", R32(w[2] + 4 * i));
+                std::fprintf(f, "\n");
+            }
+        }
         if (d >= 8) continue;
         for (int i = 15; i >= 1; i--) {
             uint32_t c = w[i];
-            int64_t gap = int64_t(c) - int64_t(clip);
-            if (c && !(c & 3) && c != a && gap > -0x400000 && gap < 0x400000) todo.push_back({c, d + 1});
+            int64_t gap = int64_t(c) - int64_t(a);
+            if (c && !(c & 3) && c != a && gap > -0x100000 && gap < 0x100000) todo.push_back({c, d + 1});
         }
     }
     std::fprintf(f, "nodes written: %d\n", nodes);
@@ -1004,6 +1024,109 @@ X86_FUNC(sub_00098450) {
     if (swap) G<float>(esp0 + 0x10) = cur;
 }
 
+// BONE HOLD (EXPERIMENT). sub_0009C0C0 looks like the keyframe interpolator the leaf (type 22) calls. While the sampler of the
+// player's fire clip runs, every call is counted (n = 0, 1, 2 ... within one sample) and the first ones are written to
+// ads_test.log as raw words ("c9" lines: the six stack words and the first words of what they point at), to learn which
+// argument is the time and whether there is one call per bone. bone_hold.txt in SaveData (read again every 0.5 s):
+//   KEY ARG CAP IDX     KEY = weapon key or ALL, ARG = stack argument 1..7 of sub_0009C0C0 holding the time (0 = off),
+//                       CAP = that float is replaced by CAP when it is above it, IDX = call numbers n, "0,3" or "*" for all
+struct BoneHold { int arg = 0; float cap = 0; bool all = false; std::set<int> idx; };
+static std::map<std::string, BoneHold> g_bone_hold;
+static std::chrono::steady_clock::time_point g_bone_checked;
+static void LoadBoneHold() {
+    auto now = std::chrono::steady_clock::now();
+    if (now - g_bone_checked < std::chrono::milliseconds(500)) return;
+    g_bone_checked = now;
+    const char* path = "/storage/emulated/0/Black/SaveData/bone_hold.txt";
+    std::ifstream f(path);
+    if (!f) {
+        if (FILE* w = std::fopen(path, "w")) {
+            std::fputs("# KEY ARG CAP IDX. KEY = weapon key (PST SHG SMG ASR AK1 GRL SM3 P90 HVY MGN M16 RM1 GK1 MP1 BNS) or ALL.\n"
+                       "# ARG = stack argument 1..7 of sub_0009C0C0 that holds the time, 0 = off. CAP = the time is held at this value\n"
+                       "# once it is above. IDX = which calls of one sample (0,1,2...) or * for all. See the c9 lines of ads_test.log.\n"
+                       "ALL 0 0 *\n", w);
+            std::fclose(w);
+        }
+        return;
+    }
+    std::map<std::string, BoneHold> m;
+    std::string line;
+    while (std::getline(f, line)) {
+        size_t at = line.find_first_not_of(" \t");
+        if (at == std::string::npos || line[at] == '#') continue;
+        std::istringstream in(line);
+        std::string key, ids;
+        BoneHold h;
+        if (!(in >> key >> h.arg >> h.cap >> ids)) continue;
+        if (ids == "*") h.all = true;
+        else {
+            std::istringstream is(ids);
+            std::string t;
+            while (std::getline(is, t, ',')) if (!t.empty()) h.idx.insert(std::atoi(t.c_str()));
+        }
+        m[key] = h;
+    }
+    g_bone_hold.swap(m);
+}
+static std::string g_fetch_weapon;
+static int g_c9_sample = 0, g_c9_calls = 0, g_c9_2c0 = 0, g_c9_be0 = 0, g_c9_lines = 0;
+static std::map<std::string, int> g_c9_detail;
+static bool PtrOk2(uint32_t p) {
+    return !(p & 3) && ((p >= 0x80000000u && p + 16 < 0x84000000u) || (p >= 0x10000u && p < 0x300000u));
+}
+X86_EXTERN_FUNC(__imp__sub_0009C2C0);
+X86_FUNC(sub_0009C2C0) {
+    if (g_fetch_active) g_c9_2c0++;
+    return __imp__sub_0009C2C0(ctx, base);
+}
+X86_EXTERN_FUNC(__imp__sub_0009BEB0);
+X86_FUNC(sub_0009BEB0) {
+    if (g_fetch_active) g_c9_be0++;
+    return __imp__sub_0009BEB0(ctx, base);
+}
+X86_EXTERN_FUNC(__imp__sub_0009C0C0);
+X86_FUNC(sub_0009C0C0) {
+    if (!g_fetch_active) return __imp__sub_0009C0C0(ctx, base);
+    uint32_t esp0 = ctx.esp;
+    int n = g_c9_calls++;
+    int& shown = g_c9_detail[g_fetch_tag];
+    if (n < 24 && g_c9_lines < 500 && shown < 48) {
+        shown++;
+        g_c9_lines++;
+        std::string s;
+        char b[96];
+        for (int i = 1; i <= 7; i++) {
+            uint32_t a = R32(esp0 + 4 * i);
+            std::snprintf(b, sizeof b, " a%d=%08X(%.3f)", i, a, double(G<float>(esp0 + 4 * i)));
+            s += b;
+        }
+        DbgLog("c9 %s s=%d n=%d ecx=%08X%s\n", g_fetch_tag.c_str(), g_c9_sample, n, ctx.ecx, s.c_str());
+        for (int i = 1; i <= 7; i++) {
+            uint32_t a = R32(esp0 + 4 * i);
+            if (!PtrOk2(a) || a < 0x100000u) continue;
+            DbgLog("c9   a%d->%08X: %08X %08X %08X %08X\n", i, a, R32(a), R32(a + 4), R32(a + 8), R32(a + 12));
+        }
+    }
+    LoadBoneHold();
+    auto it = g_bone_hold.find(g_fetch_weapon);
+    if (it == g_bone_hold.end()) it = g_bone_hold.find("ALL");
+    int slot = 0;
+    float saved = 0;
+    bool swap = false;
+    if (it != g_bone_hold.end() && it->second.arg >= 1 && it->second.arg <= 7 && it->second.cap > 0 &&
+        (it->second.all || it->second.idx.count(n))) {
+        slot = it->second.arg;
+        float v = G<float>(esp0 + 4 * slot);
+        if (std::isfinite(v) && v > it->second.cap && v < 100000.0f) {
+            saved = v;
+            G<float>(esp0 + 4 * slot) = it->second.cap;
+            swap = true;
+        }
+    }
+    __imp__sub_0009C0C0(ctx, base);
+    if (swap) G<float>(esp0 + 4 * slot) = saved;
+}
+
 X86_EXTERN_FUNC(__imp__sub_00097E00);
 X86_FUNC(sub_00097E00) {
     uint32_t clip = R32(ctx.esp + 4);
@@ -1016,8 +1139,11 @@ X86_FUNC(sub_00097E00) {
     {
         uint32_t w0 = R32(Player() + kPlayerWeapon);
         const char* wn0 = w0 ? TableName(R32(w0 + kWeaponData)) : nullptr;
-        g_fetch_tag = std::string(wn0 ? wn0 : "X") + "_" + ReadCString(ac + kAnimName, 13);
+        g_fetch_weapon = wn0 ? wn0 : "X";
+        g_fetch_tag = g_fetch_weapon + "_" + ReadCString(ac + kAnimName, 13);
     }
+    g_c9_calls = g_c9_2c0 = g_c9_be0 = 0;
+    g_c9_sample++;
     float real14 = G<float>(clip + 0x14);
     g_fetch_active = true;
     g_fetch_clip = clip;
@@ -1025,6 +1151,16 @@ X86_FUNC(sub_00097E00) {
     g_fetch_cap = cap;
     __imp__sub_00097E00(ctx, base);
     g_fetch_active = false;
+    {   // one line per sample (first 12 per weapon and clip): how many interpolator calls one pose takes
+        static std::map<std::string, int> sums;
+        int& k = sums[g_fetch_tag];
+        if (k < 12 && g_c9_lines < 500) {
+            k++;
+            g_c9_lines++;
+            DbgLog("c9 sample %s s=%d t14=%.2f calls=%d c2c0=%d be0=%d\n", g_fetch_tag.c_str(), g_c9_sample, real14, g_c9_calls,
+                   g_c9_2c0, g_c9_be0);
+        }
+    }
     if (cap > 0) {   // one line per burst: how far the clip got, to choose a cap (at most 12 lines per weapon and clip)
         static float peak = 0, last = 0;
         static std::string who;
@@ -1126,23 +1262,6 @@ X86_FUNC(sub_0017B130) {
                                  G<float>(now_clip + 0x20), G<float>(now_clip + 0x24));
                     std::fclose(log);
                 }
-            }
-        }
-        {   // EXPERIMENT: once a second while an idle clip plays: what the idle clip does at the aim of the other weapons
-            static std::chrono::steady_clock::time_point last_probe;
-            static int probes = 0;
-            bool idle_clip_name = clip_name.size() >= 5 && (clip_name.compare(clip_name.size() - 5, 5, "S_001") == 0 ||
-                                                            clip_name.compare(clip_name.size() - 5, 5, "S_190") == 0);
-            auto tnow = std::chrono::steady_clock::now();
-            if (now_clip && idle_clip_name && probes < 300 && tnow - last_probe > std::chrono::milliseconds(1000)) {
-                last_probe = tnow;
-                probes++;
-                uint32_t pw = R32(Player() + kPlayerWeapon);
-                const char* pn = pw ? TableName(R32(pw + kWeaponData)) : nullptr;
-                DbgLog("idle probe %s weapon=%s state=%u own_aim=%.2f aiming=%d blend=%.2f vm_age=%ld t14=%.2f t18=%.2f len=%.1f\n",
-                       clip_name.c_str(), pn ? pn : "-", pw ? R32(pw + kWeaponState) : 0u, g_own_aim_pub.load(),
-                       int(AimingNow()), g_vm_blend, DbgMs() - g_vm_ms, G<float>(now_clip + 0x14),
-                       G<float>(now_clip + 0x18), G<float>(now_clip + 0x1C));
             }
         }
         {   // idle hold at the aim of the SPAS 12 / Remington
