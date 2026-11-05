@@ -274,7 +274,7 @@ static void LoadAdsShifts(uint32_t data, const char* type) {
     static bool tagged = false;
     if (!tagged) {
         tagged = true;
-        DbgLog("build: dbg6 (kick mode 4: the first K tracks held, aim pin default 30)\n");
+        DbgLog("build: dbg7 (kick mode 4 fixed: time is a4, a5 is the previous time; 6th number of kick_probe = which to swap)\n");
     }
     std::ifstream f("/storage/emulated/0/Black/SaveData/ads_view.txt");
     std::string line;
@@ -893,6 +893,7 @@ static bool IdleHoldNow() {
 // 1 = +0x14, 2 = +0x18, 4 = +0x20, 8 = +0x24; none or unreadable: 15, since the shells came one a frame with +0x14 held alone). Read again every 2 seconds or so
 static float g_kick_pin = 0;  // the frame +0x14 and +0x18 are held at: the second number of kick_probe.txt
 static float g_aim_pin = 30;  // the fourth number of kick_probe.txt: the time the aim clip (S_190) is held at, default 30
+static uint32_t g_kick_sw = 3;  // the sixth number: mode 2/4 swap bits, 1 = a4 (current time, esp+0x10), 2 = a5 (previous time, esp+0x14), 3 = both
 static uint32_t g_kick_k = 16;  // the fifth number: mode 4 holds the first K tracks of the fire clip, the rest run at the real time
 static int g_detail_left = 2;   // mode 2 / 4: how many held sampler calls still write every fetch to the log
 static uint32_t g_kick_mode = 1;  // the third number: 1 the sampler sees the held time (shells lost), 2 only the keyframe fetch
@@ -903,26 +904,28 @@ static uint32_t KickProbeMask() {
     if (tick++ % 120 == 0) {
         uint32_t now = 15, mode = 1;
         float pin = 0, apin = 30;
-        unsigned kk = 16;
+        unsigned kk = 16, sw6 = 3;
         if (FILE* f = std::fopen("/storage/emulated/0/Black/SaveData/kick_probe.txt", "r")) {
             unsigned v = 0, m = 0;
             float p = 0;
-            int n = std::fscanf(f, "%u %f %u %f %u", &v, &p, &m, &apin, &kk);
+            int n = std::fscanf(f, "%u %f %u %f %u %u", &v, &p, &m, &apin, &kk, &sw6);
             if (n >= 1) now = v & 15;
             if (n >= 2 && p >= 0 && p < 60) pin = p;
             if (n >= 3 && m >= 1 && m <= 4) mode = m;
             if (n >= 4 && (apin < 0 || apin > 5000)) apin = 30;
             if (n < 5 || kk > 4000) kk = 16;
+            if (n < 6 || sw6 < 1 || sw6 > 3) sw6 = 3;
             std::fclose(f);
         }
-        if (now != mask || pin != g_kick_pin || mode != g_kick_mode || apin != g_aim_pin || kk != g_kick_k) {
-            if (mode != g_kick_mode || kk != g_kick_k) g_detail_left = 2;
+        if (now != mask || pin != g_kick_pin || mode != g_kick_mode || apin != g_aim_pin || kk != g_kick_k || sw6 != g_kick_sw) {
+            if (mode != g_kick_mode || kk != g_kick_k || sw6 != g_kick_sw) g_detail_left = 2;
+            g_kick_sw = sw6;
             g_kick_k = kk;
             g_aim_pin = apin;
             mask = now;
             g_kick_pin = pin;
             g_kick_mode = mode;
-            DbgLog("kick probe mask=%u pin=%.2f mode=%u aim_pin=%.2f k=%u\n", mask, pin, mode, apin, kk);
+            DbgLog("kick probe mask=%u pin=%.2f mode=%u aim_pin=%.2f k=%u sw=%u\n", mask, pin, mode, apin, kk, sw6);
         }
     }
     return mask;
@@ -1010,7 +1013,8 @@ X86_FUNC(sub_00098450) {
             idx = int(g_ntracks);
             g_tracks[g_ntracks++] = track;
         }
-        bool near_real = std::fabs(orig - g_fetch_real) < 0.51f;
+        float cur = G<float>(esp0 + 0x10);  // a4: the current time of the pose (it equals the clip t14 in every logged fetch)
+        bool near_real = std::fabs(cur - g_fetch_real) < 0.51f;
         bool within = g_fetch_limit == 0xFFFFFFFFu || (idx >= 0 && uint32_t(idx) < g_fetch_limit);
         swap = near_real && within;
         g_fetch_calls++;
@@ -1023,9 +1027,14 @@ X86_FUNC(sub_00098450) {
                    unsigned(R32(esp0 + 0x18)), g_fetch_real, int(swap));
         }
     }
-    if (swap) G<float>(esp0 + 0x14) = g_kick_pin + (orig - g_fetch_real);
+    float cur0 = G<float>(esp0 + 0x10);
+    if (swap && (g_kick_sw & 1)) G<float>(esp0 + 0x10) = g_kick_pin;
+    if (swap && (g_kick_sw & 2)) G<float>(esp0 + 0x14) = g_kick_pin;
     __imp__sub_00098450(ctx, base);
-    if (swap) G<float>(esp0 + 0x14) = orig;
+    if (swap) {
+        G<float>(esp0 + 0x10) = cur0;
+        G<float>(esp0 + 0x14) = orig;
+    }
 }
 
 X86_EXTERN_FUNC(__imp__sub_00097E00);
@@ -1063,12 +1072,12 @@ X86_FUNC(sub_00097E00) {
         g_fetch_detail = false;
         if (g_detail_left > 0) g_detail_left--;
         static int logs2 = 0;
-        if (logs2 < 80) {
+        if (logs2 < 200) {
             logs2++;
-            DbgLog("mode%u %s real t14=%.2f -> t14=%.2f t18=%.2f tracks=%u fetches=%u swapped=%u k=%u\n",
+            DbgLog("mode%u %s real t14=%.2f -> t14=%.2f t18=%.2f tracks=%u fetches=%u swapped=%u k=%u sw=%u\n",
                    unsigned(g_kick_mode), ReadCString(ac + kAnimName, 13).c_str(), real14, G<float>(clip + 0x14),
                    G<float>(clip + 0x18), unsigned(g_ntracks), unsigned(g_fetch_calls), unsigned(g_fetch_swaps),
-                   unsigned(g_fetch_limit == 0xFFFFFFFFu ? 0 : g_fetch_limit));
+                   unsigned(g_fetch_limit == 0xFFFFFFFFu ? 0 : g_fetch_limit), unsigned(g_kick_sw));
         }
         return;
     }
