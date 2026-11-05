@@ -291,7 +291,7 @@ enum RowId { kRenderResolution, kMaxFps, kVsync, kFpsCounter, kAniso, kReloadBlu
              kCheckUpdates, kTouchSensitivity, kLeftDeadzone, kRightDeadzone, kLeftSensitivity, kRightSensitivity,
              kScreenFilter, kGyroInvertX, kGyroInvertY, kUnlockLevels, kUnlockBlackOps, kTouchSkin, kCredit, kBloom,
              kFog, kAntiAliasing, kHdr, kEsp, kAimbot, kTouchStick, kDynamicRes, kDynamicTarget, kDynamicMin,
-             kDynamicMax, kDynamicHold, kAutoUpdate, kInfiniteMedkits, kTouchFireLook, kTouchAim };
+             kDynamicMax, kDynamicHold, kAutoUpdate, kInfiniteMedkits, kTouchFireLook, kTouchAim, kSteadyAim };
 
 using rows::Kind;
 using rows::Row;
@@ -367,6 +367,7 @@ constexpr Row kCheatRows[] = {
     {Kind::Value, kInfiniteGrenades, "INFINITE GRENADES"},
     {Kind::Value, kRapidFire, "RAPID FIRE"},
     {Kind::Value, kNoRecoil, "NO RECOIL"},
+    {Kind::Value, kSteadyAim, "STEADY AIM"},
     {Kind::Heading, -1, "PLAYER"},
     {Kind::Value, kGodMode, "GOD MODE"},
     {Kind::Value, kInfiniteMedkits, "INFINITE MEDKITS"},
@@ -450,6 +451,7 @@ bool* ToggleFlag(Settings& s, int id) {
         case kHoldAim: return &o.hold_aim;
         case kInfiniteAmmo: return &o.infinite_ammo;
         case kNoRecoil: return &o.no_recoil;
+        case kSteadyAim: return &o.steady_aim;
         case kGodMode: return &o.god_mode;
         case kInfiniteMedkits: return &o.infinite_medkits;
         case kOneHitKill: return &o.one_hit_kill;
@@ -770,6 +772,7 @@ void RestoreDefaults(int page) {
         o.infinite_ammo = none.infinite_ammo;
         o.rapid_fire = none.rapid_fire;
         o.no_recoil = none.no_recoil;
+        o.steady_aim = none.steady_aim;
         o.game_speed = none.game_speed;
         o.god_mode = none.god_mode;
         o.infinite_medkits = none.infinite_medkits;
@@ -802,6 +805,7 @@ void RestoreDefaults(int page) {
     o.infinite_ammo = keep.infinite_ammo;
     o.rapid_fire = keep.rapid_fire;
     o.no_recoil = keep.no_recoil;
+    o.steady_aim = keep.steady_aim;
     o.game_speed = keep.game_speed;
     o.god_mode = keep.god_mode;
     o.infinite_medkits = keep.infinite_medkits;
