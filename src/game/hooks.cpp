@@ -995,6 +995,21 @@ X86_FUNC(sub_0017B130) {
                 }
             }
         }
+        {   // EXPERIMENT: once a second while an idle clip plays: what the idle clip does at the aim of the other weapons
+            static std::chrono::steady_clock::time_point last_probe;
+            static int probes = 0;
+            bool idle_clip_name = clip_name.size() >= 5 && clip_name.compare(clip_name.size() - 5, 5, "S_001") == 0;
+            auto tnow = std::chrono::steady_clock::now();
+            if (now_clip && idle_clip_name && probes < 300 && tnow - last_probe > std::chrono::milliseconds(1000)) {
+                last_probe = tnow;
+                probes++;
+                uint32_t pw = R32(Player() + kPlayerWeapon);
+                const char* pn = pw ? TableName(R32(pw + kWeaponData)) : nullptr;
+                DbgLog("idle probe %s weapon=%s state=%u own_aim=%.2f t14=%.2f t18=%.2f len=%.1f\n", clip_name.c_str(),
+                       pn ? pn : "-", pw ? R32(pw + kWeaponState) : 0u, g_own_aim_pub.load(), G<float>(now_clip + 0x14),
+                       G<float>(now_clip + 0x18), G<float>(now_clip + 0x1C));
+            }
+        }
         {   // idle hold at the aim of the SPAS 12 / Remington
             static uint32_t idle_clip = 0;
             static float idle_time[2];
