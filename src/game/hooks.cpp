@@ -272,7 +272,7 @@ static void LoadAdsShifts(uint32_t data, const char* type) {
     static bool tagged = false;
     if (!tagged) {
         tagged = true;
-        DbgLog("build: dbg2 (shell birth, fire start/end, own aim per frame)\n");
+        DbgLog("build: dbg3 (kick modes 1-3, wobble probe by aim)\n");
     }
     std::ifstream f("/storage/emulated/0/Black/SaveData/ads_view.txt");
     std::string line;
@@ -854,13 +854,16 @@ static bool KickOff() {
     return row && row->v[8] <= 0;
 }
 
-// Is the player aiming: the own aim of the SPAS 12 / Remington (weapon state 0 and own_aim up), or the game's own aim of the
-// other weapons (weapon state 31 was seen at the aim of the G36C and the AKM: UNVERIFIED for the other weapons)
+// Is the player aiming: the own aim of the SPAS 12 / Remington (weapon state 0 and own_aim up), weapon state 31 (seen at the
+// aim of the G36C and the AKM in an older log, not in the last ones), or the aim's move of ads_view.txt being on (g_vm)
 static bool AimingNow() {
     uint32_t weapon = R32(Player() + kPlayerWeapon);
     if (!weapon) return false;
     uint32_t state = R32(weapon + kWeaponState);
-    return (state == 0 && g_own_aim_pub.load() > 0.5f) || state == 31;
+    // g_vm: the aim's move of ads_view.txt is on (the "aim=1" of the fire lines), seen at every weapon with a row that moves
+    bool moved = false;
+    for (float v : g_vm) moved = moved || v != 0;
+    return (state == 0 && g_own_aim_pub.load() > 0.5f) || state == 31 || moved;
 }
 
 // The idle clip stands where it was when the aim came in. idle in ads_view.txt (10th number, optional): 0 steady, 1 the
@@ -883,24 +886,28 @@ static bool IdleHoldNow() {
 // EXPERIMENT: which times of a fire clip kick 0 holds, read from kick_probe.txt beside ads_view.txt (one number, a sum:
 // 1 = +0x14, 2 = +0x18, 4 = +0x20, 8 = +0x24; none or unreadable: 15, since the shells came one a frame with +0x14 held alone). Read again every 2 seconds or so
 static float g_kick_pin = 0;  // the frame +0x14 and +0x18 are held at: the second number of kick_probe.txt
+static uint32_t g_kick_mode = 1;  // the third number: 1 the sampler sees the held time (shells lost), 2 only the keyframe fetch
+                                  // sees it, 3 the sampler runs twice (real time, then held). Left out: 1
 static uint32_t KickProbeMask() {
     static uint32_t mask = 15;
     static int tick = 0;
     if (tick++ % 120 == 0) {
-        uint32_t now = 15;
+        uint32_t now = 15, mode = 1;
         float pin = 0;
         if (FILE* f = std::fopen("/storage/emulated/0/Black/SaveData/kick_probe.txt", "r")) {
-            unsigned v = 0;
+            unsigned v = 0, m = 0;
             float p = 0;
-            int n = std::fscanf(f, "%u %f", &v, &p);
+            int n = std::fscanf(f, "%u %f %u", &v, &p, &m);
             if (n >= 1) now = v & 15;
             if (n >= 2 && p >= 0 && p < 60) pin = p;
+            if (n >= 3 && m >= 1 && m <= 3) mode = m;
             std::fclose(f);
         }
-        if (now != mask || pin != g_kick_pin) {
+        if (now != mask || pin != g_kick_pin || mode != g_kick_mode) {
             mask = now;
             g_kick_pin = pin;
-            DbgLog("kick probe mask=%u pin=%.2f\n", mask, pin);
+            g_kick_mode = mode;
+            DbgLog("kick probe mask=%u pin=%.2f mode=%u\n", mask, pin, mode);
         }
     }
     return mask;
@@ -924,7 +931,7 @@ static std::map<uint32_t, WobbleClip> g_wobble;
 static std::chrono::steady_clock::time_point g_wobble_start;
 static int g_wobble_dumps = 0;
 static void WobbleProbe(uint32_t clip, uint32_t ac) {
-    if (g_wobble_dumps >= 40) return;
+    if (g_wobble_dumps >= 60) return;
     if (!AimingNow() || (ac && IsFireClip(ReadCString(ac + kAnimName, 13)))) {
         g_wobble.clear();
         return;
@@ -946,8 +953,9 @@ static void WobbleProbe(uint32_t clip, uint32_t ac) {
     g_wobble_dumps++;
     uint32_t weapon = R32(Player() + kPlayerWeapon);
     const char* wn = weapon ? TableName(R32(weapon + kWeaponData)) : nullptr;
-    DbgLog("wobble probe #%d weapon=%s state=%u own_aim=%.2f clips=%d\n", g_wobble_dumps, wn ? wn : "-",
-           weapon ? R32(weapon + kWeaponState) : 0u, g_own_aim_pub.load(), int(g_wobble.size()));
+    DbgLog("wobble probe #%d weapon=%s state=%u own_aim=%.2f main_clip=%s clips=%d\n", g_wobble_dumps, wn ? wn : "-",
+           weapon ? R32(weapon + kWeaponState) : 0u, g_own_aim_pub.load(), ac ? ReadCString(ac + kAnimName, 13).c_str() : "-",
+           int(g_wobble.size()));
     int shown = 0;
     for (const auto& kv : g_wobble) {
         if (shown++ >= 14) break;
@@ -955,6 +963,31 @@ static void WobbleProbe(uint32_t clip, uint32_t ac) {
                int(kv.second.main), kv.second.calls, kv.second.changes, kv.second.first, kv.second.last, kv.second.len);
     }
     g_wobble.clear();
+}
+
+// MODE 2 helper (UNVERIFIED): sub_00098450 (VA 0x98450) takes the clip as its first argument and, at the call at 0x96C7B, the
+// time of the pose as its fifth (a float). While the sampler of a held clip runs, a time that is about the clip's real t14 is
+// swapped for the held time, so only the pose sees it. The first fetches are written to the log to check the guess
+static bool g_fetch_active = false;
+static uint32_t g_fetch_clip = 0;
+static float g_fetch_real = 0;
+X86_EXTERN_FUNC(__imp__sub_00098450);
+X86_FUNC(sub_00098450) {
+    if (!g_fetch_active) return __imp__sub_00098450(ctx, base);
+    uint32_t esp0 = ctx.esp;
+    bool mine = R32(esp0 + 4) == g_fetch_clip;
+    float orig = G<float>(esp0 + 0x14);
+    bool swap = mine && std::fabs(orig - g_fetch_real) < 0.51f;
+    if (mine) {
+        static int logs = 0;
+        if (logs < 60) {
+            logs++;
+            DbgLog("fetch arg5=%.3f real t14=%.3f swapped=%d\n", orig, g_fetch_real, int(swap));
+        }
+    }
+    if (swap) G<float>(esp0 + 0x14) = g_kick_pin + (orig - g_fetch_real);
+    __imp__sub_00098450(ctx, base);
+    if (swap) G<float>(esp0 + 0x14) = orig;
 }
 
 X86_EXTERN_FUNC(__imp__sub_00097E00);
@@ -976,6 +1009,42 @@ X86_FUNC(sub_00097E00) {
     }
     if (!hold) return __imp__sub_00097E00(ctx, base);
     float real14 = G<float>(clip + 0x14), real18 = G<float>(clip + 0x18);
+    if (g_kick_mode == 2) {
+        // MODE 2: the sampler and the events keep the real times; sub_00098450 (the keyframe fetch) swaps the time it is given
+        // for the held one while g_fetch_active is set. The sampler ends by itself with t18 = t14: nothing to put back
+        g_fetch_active = true;
+        g_fetch_clip = clip;
+        g_fetch_real = real14;
+        __imp__sub_00097E00(ctx, base);
+        g_fetch_active = false;
+        static int logs2 = 0;
+        if (logs2 < 40) {
+            logs2++;
+            DbgLog("mode2 %s real t14=%.2f -> t14=%.2f t18=%.2f\n", ReadCString(ac + kAnimName, 13).c_str(), real14,
+                   G<float>(clip + 0x14), G<float>(clip + 0x18));
+        }
+        return;
+    }
+    if (g_kick_mode == 3) {
+        // MODE 3: pass 1 with the real times (the events, the pose), pass 2 with the held time (the pose replaces the first;
+        // the window of the events is empty then). The stack pointer is put back to the call's own for the second run
+        uint32_t esp0 = ctx.esp;
+        __imp__sub_00097E00(ctx, base);
+        float after14 = G<float>(clip + 0x14), after18 = G<float>(clip + 0x18);
+        ctx.esp = esp0;
+        G<float>(clip + 0x14) = g_kick_pin;
+        G<float>(clip + 0x18) = g_kick_pin;
+        __imp__sub_00097E00(ctx, base);
+        G<float>(clip + 0x14) = after14;
+        G<float>(clip + 0x18) = after18;
+        static int logs3 = 0;
+        if (logs3 < 40) {
+            logs3++;
+            DbgLog("mode3 %s real t14=%.2f t18=%.2f -> t14=%.2f t18=%.2f\n", ReadCString(ac + kAnimName, 13).c_str(), real14,
+                   real18, after14, after18);
+        }
+        return;
+    }
     G<float>(clip + 0x14) = g_kick_pin;
     G<float>(clip + 0x18) = g_kick_pin;
     __imp__sub_00097E00(ctx, base);
