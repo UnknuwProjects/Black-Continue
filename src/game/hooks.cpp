@@ -9,6 +9,7 @@
 #include <string>
 #include <fstream>
 #include <map>
+#include <set>
 #include <sstream>
 #include <sys/stat.h>
 #include <vector>
@@ -283,7 +284,7 @@ static void LoadAdsShifts(uint32_t data, const char* type) {
     static bool tagged = false;
     if (!tagged) {
         tagged = true;
-        DbgLog("build: dbg8 (recoil cap per weapon from recoil_cap.txt; the old kick 0 holds removed; log renewed at start, trimmed at 200 KB)\n");
+        DbgLog("build: dbg9 (as dbg8, plus tree_<weapon>.log: the node tree of the fire clip, one file per weapon)\n");
     }
     std::ifstream f("/storage/emulated/0/Black/SaveData/ads_view.txt");
     std::string line;
@@ -948,6 +949,43 @@ static void AimPinRefresh() {
 // cap is swapped for the cap, so only the pose stops. The events (shells, sound) keep the real time.
 static uint32_t g_kick_ac = 0;  // the player's animation controller, noted by sub_0017B130
 static bool g_fetch_active = false;
+static std::string g_fetch_tag;  // WEAPON_clipname of the fire clip being sampled, for the tree file
+// DIAGNOSIS: the node tree the pose is read from, to see whether the recoil and the belt are apart in it. 0x98450 hands the
+// node to a handler by its type (the low six bits of its first byte); type 2 is a sequence: a count at byte 1 and the children
+// from +0x10, each with its own duration, the one that holds the time gets the rest of it. The other types are not read yet,
+// so every node is written as raw words, and each word that points near the clip object is followed. One file per weapon.
+static void TreeDump(const std::string& tag, uint32_t clip, uint32_t root) {
+    std::string path = std::string("/storage/emulated/0/Black/SaveData/tree_") + tag + ".log";
+    FILE* f = std::fopen(path.c_str(), "w");
+    if (!f) return;
+    std::fprintf(f, "clip %08X root %08X\nclip object:", clip, root);
+    for (int i = 0; i < 48; i++) std::fprintf(f, "%s%08X", (i % 8) ? " " : "\n  ", R32(clip + 4 * i));
+    std::fprintf(f, "\ntree:\n");
+    std::set<uint32_t> seen;
+    std::vector<std::pair<uint32_t, int>> todo;
+    todo.push_back({root, 0});
+    int nodes = 0;
+    while (!todo.empty() && nodes < 150) {
+        uint32_t a = todo.back().first;
+        int d = todo.back().second;
+        todo.pop_back();
+        if (!seen.insert(a).second) continue;
+        nodes++;
+        uint32_t w[16];
+        for (int i = 0; i < 16; i++) w[i] = R32(a + 4 * i);
+        std::fprintf(f, "%*snode %08X d=%d type=%u b1=%d:", d * 2, "", a, d, w[0] & 0x3F, int(int8_t(w[0] >> 8)));
+        for (int i = 0; i < 16; i++) std::fprintf(f, " %08X", w[i]);
+        std::fprintf(f, "\n");
+        if (d >= 8) continue;
+        for (int i = 15; i >= 1; i--) {
+            uint32_t c = w[i];
+            int64_t gap = int64_t(c) - int64_t(clip);
+            if (c && !(c & 3) && c != a && gap > -0x400000 && gap < 0x400000) todo.push_back({c, d + 1});
+        }
+    }
+    std::fprintf(f, "nodes written: %d\n", nodes);
+    std::fclose(f);
+}
 static uint32_t g_fetch_clip = 0;
 static float g_fetch_real = 0, g_fetch_cap = 0;
 X86_EXTERN_FUNC(__imp__sub_00098450);
@@ -955,8 +993,12 @@ X86_FUNC(sub_00098450) {
     if (!g_fetch_active) return __imp__sub_00098450(ctx, base);
     uint32_t esp0 = ctx.esp;
     if (R32(esp0 + 4) != g_fetch_clip) return __imp__sub_00098450(ctx, base);
+    {
+        static std::set<std::string> dumped;
+        if (dumped.insert(g_fetch_tag).second) TreeDump(g_fetch_tag, g_fetch_clip, R32(esp0 + 8));
+    }
     float cur = G<float>(esp0 + 0x10);
-    bool swap = std::fabs(cur - g_fetch_real) < 0.51f && cur > g_fetch_cap;
+    bool swap = g_fetch_cap > 0 && std::fabs(cur - g_fetch_real) < 0.51f && cur > g_fetch_cap;
     if (swap) G<float>(esp0 + 0x10) = g_fetch_cap;
     __imp__sub_00098450(ctx, base);
     if (swap) G<float>(esp0 + 0x10) = cur;
@@ -967,10 +1009,15 @@ X86_FUNC(sub_00097E00) {
     uint32_t clip = R32(ctx.esp + 4);
     uint32_t ac = g_kick_ac;
     AimPinRefresh();
-    float cap = 0;
-    bool hold = clip && ac && R32(ac + kAnimClip) == clip && R32(ac + kAnimOwner) == Player() &&
-                IsFireClip(ReadCString(ac + kAnimName, 13)) && (cap = RecoilCap()) > 0;
-    if (!hold) return __imp__sub_00097E00(ctx, base);
+    bool fire = clip && ac && R32(ac + kAnimClip) == clip && R32(ac + kAnimOwner) == Player() &&
+                IsFireClip(ReadCString(ac + kAnimName, 13));
+    if (!fire) return __imp__sub_00097E00(ctx, base);
+    float cap = RecoilCap();  // 0: the pose is the game's own, the fetch is only watched for the tree file
+    {
+        uint32_t w0 = R32(Player() + kPlayerWeapon);
+        const char* wn0 = w0 ? TableName(R32(w0 + kWeaponData)) : nullptr;
+        g_fetch_tag = std::string(wn0 ? wn0 : "X") + "_" + ReadCString(ac + kAnimName, 13);
+    }
     float real14 = G<float>(clip + 0x14);
     g_fetch_active = true;
     g_fetch_clip = clip;
@@ -978,7 +1025,7 @@ X86_FUNC(sub_00097E00) {
     g_fetch_cap = cap;
     __imp__sub_00097E00(ctx, base);
     g_fetch_active = false;
-    {   // one line per burst: how far the clip got, to choose a cap (at most 12 lines per weapon and clip)
+    if (cap > 0) {   // one line per burst: how far the clip got, to choose a cap (at most 12 lines per weapon and clip)
         static float peak = 0, last = 0;
         static std::string who;
         static float who_cap = 0;
