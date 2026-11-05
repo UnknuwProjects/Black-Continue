@@ -900,6 +900,16 @@ X86_FUNC(sub_00097E00) {
     uint32_t ac = g_kick_ac;
     bool hold = clip && ac && R32(ac + kAnimClip) == clip && R32(ac + kAnimOwner) == Player() &&
                 IsFireClip(ReadCString(ac + kAnimName, 13)) && KickOff() && (KickProbeMask() & 3);
+    {   // DIAGNOSIS: is the sampler reached, with which object, and why is the hold off
+        static int seen = 0, fire_seen = 0;
+        bool fire_now = ac && IsFireClip(ReadCString(ac + kAnimName, 13)) && KickOff();
+        if (seen < 6 || (fire_now && fire_seen < 40)) {
+            if (seen >= 6) fire_seen++;
+            seen++;
+            DbgLog("sampler call #%d arg=%08X ac=%08X ac_clip=%08X fire_kick0=%d mask=%u hold=%d\n", seen, unsigned(clip),
+                   unsigned(ac), ac ? unsigned(R32(ac + kAnimClip)) : 0u, int(fire_now), KickProbeMask(), int(hold));
+        }
+    }
     if (!hold) return __imp__sub_00097E00(ctx, base);
     float real14 = G<float>(clip + 0x14), real18 = G<float>(clip + 0x18);
     G<float>(clip + 0x14) = g_kick_pin;
