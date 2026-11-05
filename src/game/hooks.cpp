@@ -284,7 +284,7 @@ static void LoadAdsShifts(uint32_t data, const char* type) {
     static bool tagged = false;
     if (!tagged) {
         tagged = true;
-        DbgLog("build: dbg10 (as dbg9, tree dump fixed + leaf data block, c9 log of sub_0009C0C0, bone_hold.txt)\n");
+        DbgLog("build: dbg12 (aim bit fixed 0x80; c9 log + bone_hold.txt FUNC column for 12 functions under sub_0009BEB0)\n");
     }
     std::ifstream f("/storage/emulated/0/Black/SaveData/ads_view.txt");
     std::string line;
@@ -474,49 +474,12 @@ static uint32_t PadBits() {
 // The weapons without zoom never get the game's aim byte, so the aim is read from the pad. Which bit of it is the aim is
 // learned from the weapons that have one: the bit that is down when the game's aim byte is set and up when it is not.
 // Kept in ads_aim.txt, a number, delete the file to learn again
-static uint32_t g_aim_bit = 0;
+static uint32_t g_aim_bit = 0x80;  // FIXED: right stick click (128). Never learned, ads_aim.txt is ignored.
 static const char* const kAimFile = "/storage/emulated/0/Black/SaveData/ads_aim.txt";
 
-static void LearnAim(bool held) {
-    static int held_frames = 0, free_frames = 0, held_with[32] = {}, free_with[32] = {};
-    if (g_aim_bit) return;
-    uint32_t bits = PadBits();
-    (held ? held_frames : free_frames)++;
-    for (int b = 0; b < 32; b++)
-        if (bits >> b & 1) (held ? held_with : free_with)[b]++;
-    if (held_frames < 30 || free_frames < 30) return;
-    int best = -1;
-    float best_score = 0.8f;
-    for (int b = 0; b < 32; b++) {
-        float score = float(held_with[b]) / held_frames - float(free_with[b]) / free_frames;
-        if (score > best_score) best = b, best_score = score;
-    }
-    if (best < 0) return;
-    g_aim_bit = 1u << best;
-    if (FILE* f = std::fopen(kAimFile, "w")) {
-        std::fprintf(f, "%u\n", unsigned(g_aim_bit));
-        std::fclose(f);
-    }
-    if (FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/ads_test.log", "a")) {
-        std::fprintf(log, "aim learned: pad bit %d (score %.2f)\n", best, best_score);
-        std::fclose(log);
-    }
-}
+static void LearnAim(bool) {}  // learning removed: the bit is fixed at 0x80
 
-static bool AimHeld() {
-    static bool loaded = false;
-    if (!loaded) {
-        loaded = true;
-        unsigned v = 0;
-        if (FILE* f = std::fopen(kAimFile, "r")) {
-            if (std::fscanf(f, "%u", &v) == 1) g_aim_bit = v;
-            std::fclose(f);
-        }
-    }
-    // not learned (yet): the right stick click, the only bit that moved with the aim button on the SPAS 12 and Remington
-    uint32_t bit = g_aim_bit ? g_aim_bit : 0x80;
-    return (PadBits() & bit) != 0;
-}
+static bool AimHeld() { return (PadBits() & 0x80u) != 0; }
 
 // The aim of the SPAS 12 / Remington as the game's other weapons take it. In MODE BIDIK NORMAL, or with HOLD TO AIM on, the button is passed as
 // held and is followed as it is. In KETUK + TAHAN with HOLD TO AIM off the touch layer sends the game a short pulse per press (touch.cpp:
@@ -1024,14 +987,20 @@ X86_FUNC(sub_00098450) {
     if (swap) G<float>(esp0 + 0x10) = cur;
 }
 
-// BONE HOLD (EXPERIMENT). sub_0009C0C0 looks like the keyframe interpolator the leaf (type 22) calls. While the sampler of the
-// player's fire clip runs, every call is counted (n = 0, 1, 2 ... within one sample) and the first ones are written to
-// ads_test.log as raw words ("c9" lines: the six stack words and the first words of what they point at), to learn which
-// argument is the time and whether there is one call per bone. bone_hold.txt in SaveData (read again every 0.5 s):
-//   KEY ARG CAP IDX     KEY = weapon key or ALL, ARG = stack argument 1..7 of sub_0009C0C0 holding the time (0 = off),
-//                       CAP = that float is replaced by CAP when it is above it, IDX = call numbers n, "0,3" or "*" for all
-struct BoneHold { int arg = 0; float cap = 0; bool all = false; std::set<int> idx; };
-static std::map<std::string, BoneHold> g_bone_hold;
+// BONE HOLD (EXPERIMENT, dbg12). The functions below are the ones sub_0009BEB0 (the pose of a type 0 leaf) calls, plus the
+// 0x9C2C0 / 0x9C0C0 pair of the other path. While the sampler of the player's fire clip runs, every call is counted per function
+// (n = 0, 1, 2 ... within one sample) and the first ones are written to ads_test.log ("c9" lines: ecx, the six stack words and the
+// first words of what they point at). The sample line ("c9 sample") lists how many times each function was called in one pose.
+// bone_hold.txt in SaveData (read again every 0.5 s), one rule per line:
+//   KEY FUNC ARG CAP IDX   KEY = weapon key or ALL, FUNC = function address in hex (9BEB0 9C2C0 9C0C0 9B160 9B280 9BAB0 93B00
+//                          92570 9BBC0 9BD20 9BC40 9BE70), ARG = stack argument 1..7 holding the time as a float (0 = off),
+//                          CAP = that float is replaced by CAP while it is above it, IDX = call numbers n, "0,3" or "*" for all.
+// The old four column lines (no FUNC) still read, they mean FUNC = 9C0C0.
+static const uint32_t kBhAddr[] = {0x9BEB0, 0x9C2C0, 0x9C0C0, 0x9B160, 0x9B280, 0x9BAB0, 0x93B00, 0x92570, 0x9BBC0, 0x9BD20, 0x9BC40, 0x9BE70};
+static const int kBhN = 12;
+static int g_bh_calls[kBhN];
+struct BoneRule { std::string key; uint32_t func = 0; int arg = 0; float cap = 0; bool all = false; std::set<int> idx; };
+static std::vector<BoneRule> g_bone_rules;
 static std::chrono::steady_clock::time_point g_bone_checked;
 static void LoadBoneHold() {
     auto now = std::chrono::steady_clock::now();
@@ -1041,90 +1010,211 @@ static void LoadBoneHold() {
     std::ifstream f(path);
     if (!f) {
         if (FILE* w = std::fopen(path, "w")) {
-            std::fputs("# KEY ARG CAP IDX. KEY = weapon key (PST SHG SMG ASR AK1 GRL SM3 P90 HVY MGN M16 RM1 GK1 MP1 BNS) or ALL.\n"
-                       "# ARG = stack argument 1..7 of sub_0009C0C0 that holds the time, 0 = off. CAP = the time is held at this value\n"
+            std::fputs("# KEY FUNC ARG CAP IDX. KEY = weapon key (PST SHG SMG ASR AK1 GRL SM3 P90 HVY MGN M16 RM1 GK1 MP1 BNS) or ALL.\n"
+                       "# FUNC = hex address: 9BEB0 9C2C0 9C0C0 9B160 9B280 9BAB0 93B00 92570 9BBC0 9BD20 9BC40 9BE70\n"
+                       "# ARG = stack argument 1..7 of FUNC that holds the time as a float, 0 = off. CAP = the time is held at this value\n"
                        "# once it is above. IDX = which calls of one sample (0,1,2...) or * for all. See the c9 lines of ads_test.log.\n"
-                       "ALL 0 0 *\n", w);
+                       "ALL 9BEB0 0 0 *\n", w);
             std::fclose(w);
         }
         return;
     }
-    std::map<std::string, BoneHold> m;
+    std::vector<BoneRule> m;
     std::string line;
     while (std::getline(f, line)) {
-        size_t at = line.find_first_not_of(" \t");
+        size_t at = line.find_first_not_of(" \t\r");
         if (at == std::string::npos || line[at] == '#') continue;
         std::istringstream in(line);
-        std::string key, ids;
-        BoneHold h;
-        if (!(in >> key >> h.arg >> h.cap >> ids)) continue;
-        if (ids == "*") h.all = true;
+        std::vector<std::string> t;
+        std::string w;
+        while (in >> w) t.push_back(w);
+        BoneRule r;
+        std::string ids;
+        if (t.size() >= 5) {
+            r.key = t[0];
+            r.func = uint32_t(std::strtoul(t[1].c_str(), nullptr, 16));
+            r.arg = std::atoi(t[2].c_str());
+            r.cap = float(std::atof(t[3].c_str()));
+            ids = t[4];
+        } else if (t.size() == 4) {
+            r.key = t[0];
+            r.func = 0x9C0C0;
+            r.arg = std::atoi(t[1].c_str());
+            r.cap = float(std::atof(t[2].c_str()));
+            ids = t[3];
+        } else continue;
+        if (ids == "*") r.all = true;
         else {
             std::istringstream is(ids);
-            std::string t;
-            while (std::getline(is, t, ',')) if (!t.empty()) h.idx.insert(std::atoi(t.c_str()));
+            std::string x;
+            while (std::getline(is, x, ',')) if (!x.empty()) r.idx.insert(std::atoi(x.c_str()));
         }
-        m[key] = h;
+        m.push_back(r);
     }
-    g_bone_hold.swap(m);
+    g_bone_rules.swap(m);
 }
 static std::string g_fetch_weapon;
-static int g_c9_sample = 0, g_c9_calls = 0, g_c9_2c0 = 0, g_c9_be0 = 0, g_c9_lines = 0;
+static int g_c9_sample = 0, g_c9_lines = 0;
 static std::map<std::string, int> g_c9_detail;
 static bool PtrOk2(uint32_t p) {
     return !(p & 3) && ((p >= 0x80000000u && p + 16 < 0x84000000u) || (p >= 0x10000u && p < 0x300000u));
 }
-X86_EXTERN_FUNC(__imp__sub_0009C2C0);
-X86_FUNC(sub_0009C2C0) {
-    if (g_fetch_active) g_c9_2c0++;
-    return __imp__sub_0009C2C0(ctx, base);
-}
-X86_EXTERN_FUNC(__imp__sub_0009BEB0);
-X86_FUNC(sub_0009BEB0) {
-    if (g_fetch_active) g_c9_be0++;
-    return __imp__sub_0009BEB0(ctx, base);
-}
-X86_EXTERN_FUNC(__imp__sub_0009C0C0);
-X86_FUNC(sub_0009C0C0) {
-    if (!g_fetch_active) return __imp__sub_0009C0C0(ctx, base);
-    uint32_t esp0 = ctx.esp;
-    int n = g_c9_calls++;
-    int& shown = g_c9_detail[g_fetch_tag];
-    if (n < 24 && g_c9_lines < 500 && shown < 48) {
-        shown++;
-        g_c9_lines++;
-        std::string s;
-        char b[96];
-        for (int i = 1; i <= 7; i++) {
-            uint32_t a = R32(esp0 + 4 * i);
-            std::snprintf(b, sizeof b, " a%d=%08X(%.3f)", i, a, double(G<float>(esp0 + 4 * i)));
-            s += b;
-        }
-        DbgLog("c9 %s s=%d n=%d ecx=%08X%s\n", g_fetch_tag.c_str(), g_c9_sample, n, ctx.ecx, s.c_str());
-        for (int i = 1; i <= 7; i++) {
-            uint32_t a = R32(esp0 + 4 * i);
-            if (!PtrOk2(a) || a < 0x100000u) continue;
-            DbgLog("c9   a%d->%08X: %08X %08X %08X %08X\n", i, a, R32(a), R32(a + 4), R32(a + 8), R32(a + 12));
+// Called at the entry of every watched function. Returns true when a stack argument was replaced (BhLeave puts it back).
+static bool BhEnter(int fid, uint32_t esp0, uint32_t ecx, int& slot, float& saved) {
+    slot = 0;
+    saved = 0;
+    if (!g_fetch_active) return false;
+    int n = g_bh_calls[fid]++;
+    {
+        char key[96];
+        std::snprintf(key, sizeof key, "%s#%05X", g_fetch_tag.c_str(), unsigned(kBhAddr[fid]));
+        int& shown = g_c9_detail[key];
+        if (shown < 6 && g_c9_lines < 900) {
+            shown++;
+            g_c9_lines++;
+            std::string s;
+            char b[96];
+            for (int i = 1; i <= 6; i++) {
+                uint32_t a = R32(esp0 + 4 * i);
+                std::snprintf(b, sizeof b, " a%d=%08X(%.3f)", i, a, double(G<float>(esp0 + 4 * i)));
+                s += b;
+            }
+            DbgLog("c9 %s f=%05X s=%d n=%d ecx=%08X%s\n", g_fetch_tag.c_str(), unsigned(kBhAddr[fid]), g_c9_sample, n, ecx, s.c_str());
+            for (int i = 0; i <= 6; i++) {
+                uint32_t a = i ? R32(esp0 + 4 * i) : ecx;
+                if (!PtrOk2(a) || a < 0x100000u) continue;
+                DbgLog("c9   %s->%08X: %08X %08X %08X %08X\n", i ? ("a" + std::to_string(i)).c_str() : "ecx", a, R32(a), R32(a + 4),
+                       R32(a + 8), R32(a + 12));
+            }
         }
     }
     LoadBoneHold();
-    auto it = g_bone_hold.find(g_fetch_weapon);
-    if (it == g_bone_hold.end()) it = g_bone_hold.find("ALL");
-    int slot = 0;
-    float saved = 0;
-    bool swap = false;
-    if (it != g_bone_hold.end() && it->second.arg >= 1 && it->second.arg <= 7 && it->second.cap > 0 &&
-        (it->second.all || it->second.idx.count(n))) {
-        slot = it->second.arg;
-        float v = G<float>(esp0 + 4 * slot);
-        if (std::isfinite(v) && v > it->second.cap && v < 100000.0f) {
-            saved = v;
-            G<float>(esp0 + 4 * slot) = it->second.cap;
-            swap = true;
-        }
-    }
-    __imp__sub_0009C0C0(ctx, base);
+    const BoneRule* use = nullptr;
+    for (int pass = 0; pass < 2 && !use; pass++)
+        for (const BoneRule& r : g_bone_rules)
+            if (r.func == kBhAddr[fid] && r.key == (pass == 0 ? g_fetch_weapon : std::string("ALL")) && r.arg >= 1 && r.arg <= 7 &&
+                r.cap > 0 && (r.all || r.idx.count(n))) {
+                use = &r;
+                break;
+            }
+    if (!use) return false;
+    float v = G<float>(esp0 + 4 * use->arg);
+    if (!std::isfinite(v) || !(v > use->cap) || !(v < 100000.0f)) return false;
+    slot = use->arg;
+    saved = v;
+    G<float>(esp0 + 4 * slot) = use->cap;
+    return true;
+}
+static void BhLeave(uint32_t esp0, bool swap, int slot, float saved) {
     if (swap) G<float>(esp0 + 4 * slot) = saved;
+}
+X86_EXTERN_FUNC(__imp__sub_0009BEB0);
+X86_FUNC(sub_0009BEB0) {
+    uint32_t esp0 = ctx.esp;
+    int slot;
+    float saved;
+    bool sw = BhEnter(0, esp0, ctx.ecx, slot, saved);
+    __imp__sub_0009BEB0(ctx, base);
+    BhLeave(esp0, sw, slot, saved);
+}
+X86_EXTERN_FUNC(__imp__sub_0009C2C0);
+X86_FUNC(sub_0009C2C0) {
+    uint32_t esp0 = ctx.esp;
+    int slot;
+    float saved;
+    bool sw = BhEnter(1, esp0, ctx.ecx, slot, saved);
+    __imp__sub_0009C2C0(ctx, base);
+    BhLeave(esp0, sw, slot, saved);
+}
+X86_EXTERN_FUNC(__imp__sub_0009C0C0);
+X86_FUNC(sub_0009C0C0) {
+    uint32_t esp0 = ctx.esp;
+    int slot;
+    float saved;
+    bool sw = BhEnter(2, esp0, ctx.ecx, slot, saved);
+    __imp__sub_0009C0C0(ctx, base);
+    BhLeave(esp0, sw, slot, saved);
+}
+X86_EXTERN_FUNC(__imp__sub_0009B160);
+X86_FUNC(sub_0009B160) {
+    uint32_t esp0 = ctx.esp;
+    int slot;
+    float saved;
+    bool sw = BhEnter(3, esp0, ctx.ecx, slot, saved);
+    __imp__sub_0009B160(ctx, base);
+    BhLeave(esp0, sw, slot, saved);
+}
+X86_EXTERN_FUNC(__imp__sub_0009B280);
+X86_FUNC(sub_0009B280) {
+    uint32_t esp0 = ctx.esp;
+    int slot;
+    float saved;
+    bool sw = BhEnter(4, esp0, ctx.ecx, slot, saved);
+    __imp__sub_0009B280(ctx, base);
+    BhLeave(esp0, sw, slot, saved);
+}
+X86_EXTERN_FUNC(__imp__sub_0009BAB0);
+X86_FUNC(sub_0009BAB0) {
+    uint32_t esp0 = ctx.esp;
+    int slot;
+    float saved;
+    bool sw = BhEnter(5, esp0, ctx.ecx, slot, saved);
+    __imp__sub_0009BAB0(ctx, base);
+    BhLeave(esp0, sw, slot, saved);
+}
+X86_EXTERN_FUNC(__imp__sub_00093B00);
+X86_FUNC(sub_00093B00) {
+    uint32_t esp0 = ctx.esp;
+    int slot;
+    float saved;
+    bool sw = BhEnter(6, esp0, ctx.ecx, slot, saved);
+    __imp__sub_00093B00(ctx, base);
+    BhLeave(esp0, sw, slot, saved);
+}
+X86_EXTERN_FUNC(__imp__sub_00092570);
+X86_FUNC(sub_00092570) {
+    uint32_t esp0 = ctx.esp;
+    int slot;
+    float saved;
+    bool sw = BhEnter(7, esp0, ctx.ecx, slot, saved);
+    __imp__sub_00092570(ctx, base);
+    BhLeave(esp0, sw, slot, saved);
+}
+X86_EXTERN_FUNC(__imp__sub_0009BBC0);
+X86_FUNC(sub_0009BBC0) {
+    uint32_t esp0 = ctx.esp;
+    int slot;
+    float saved;
+    bool sw = BhEnter(8, esp0, ctx.ecx, slot, saved);
+    __imp__sub_0009BBC0(ctx, base);
+    BhLeave(esp0, sw, slot, saved);
+}
+X86_EXTERN_FUNC(__imp__sub_0009BD20);
+X86_FUNC(sub_0009BD20) {
+    uint32_t esp0 = ctx.esp;
+    int slot;
+    float saved;
+    bool sw = BhEnter(9, esp0, ctx.ecx, slot, saved);
+    __imp__sub_0009BD20(ctx, base);
+    BhLeave(esp0, sw, slot, saved);
+}
+X86_EXTERN_FUNC(__imp__sub_0009BC40);
+X86_FUNC(sub_0009BC40) {
+    uint32_t esp0 = ctx.esp;
+    int slot;
+    float saved;
+    bool sw = BhEnter(10, esp0, ctx.ecx, slot, saved);
+    __imp__sub_0009BC40(ctx, base);
+    BhLeave(esp0, sw, slot, saved);
+}
+X86_EXTERN_FUNC(__imp__sub_0009BE70);
+X86_FUNC(sub_0009BE70) {
+    uint32_t esp0 = ctx.esp;
+    int slot;
+    float saved;
+    bool sw = BhEnter(11, esp0, ctx.ecx, slot, saved);
+    __imp__sub_0009BE70(ctx, base);
+    BhLeave(esp0, sw, slot, saved);
 }
 
 X86_EXTERN_FUNC(__imp__sub_00097E00);
@@ -1142,7 +1232,7 @@ X86_FUNC(sub_00097E00) {
         g_fetch_weapon = wn0 ? wn0 : "X";
         g_fetch_tag = g_fetch_weapon + "_" + ReadCString(ac + kAnimName, 13);
     }
-    g_c9_calls = g_c9_2c0 = g_c9_be0 = 0;
+    std::memset(g_bh_calls, 0, sizeof g_bh_calls);
     g_c9_sample++;
     float real14 = G<float>(clip + 0x14);
     g_fetch_active = true;
@@ -1157,8 +1247,13 @@ X86_FUNC(sub_00097E00) {
         if (k < 12 && g_c9_lines < 500) {
             k++;
             g_c9_lines++;
-            DbgLog("c9 sample %s s=%d t14=%.2f calls=%d c2c0=%d be0=%d\n", g_fetch_tag.c_str(), g_c9_sample, real14, g_c9_calls,
-                   g_c9_2c0, g_c9_be0);
+            std::string cnt;
+            char cb[40];
+            for (int i = 0; i < kBhN; i++) {
+                std::snprintf(cb, sizeof cb, " %05X=%d", unsigned(kBhAddr[i]), g_bh_calls[i]);
+                cnt += cb;
+            }
+            DbgLog("c9 sample %s s=%d t14=%.2f calls:%s\n", g_fetch_tag.c_str(), g_c9_sample, real14, cnt.c_str());
         }
     }
     if (cap > 0) {   // one line per burst: how far the clip got, to choose a cap (at most 12 lines per weapon and clip)
