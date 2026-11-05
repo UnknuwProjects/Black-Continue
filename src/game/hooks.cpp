@@ -274,7 +274,7 @@ static void LoadAdsShifts(uint32_t data, const char* type) {
     static bool tagged = false;
     if (!tagged) {
         tagged = true;
-        DbgLog("build: dbg4 (idle hold only at a fresh aim, aim shown in the idle probe)\n");
+        DbgLog("build: dbg5 (idle hold also holds the aim clip S_190 of the G36C / AKM, pin from kick_probe.txt)\n");
     }
     std::ifstream f("/storage/emulated/0/Black/SaveData/ads_view.txt");
     std::string line;
@@ -892,6 +892,7 @@ static bool IdleHoldNow() {
 // EXPERIMENT: which times of a fire clip kick 0 holds, read from kick_probe.txt beside ads_view.txt (one number, a sum:
 // 1 = +0x14, 2 = +0x18, 4 = +0x20, 8 = +0x24; none or unreadable: 15, since the shells came one a frame with +0x14 held alone). Read again every 2 seconds or so
 static float g_kick_pin = 0;  // the frame +0x14 and +0x18 are held at: the second number of kick_probe.txt
+static float g_aim_pin = 0;  // the fourth number of kick_probe.txt: the time the aim clip (S_190) is held at, default 0
 static uint32_t g_kick_mode = 1;  // the third number: 1 the sampler sees the held time (shells lost), 2 only the keyframe fetch
                                   // sees it, 3 the sampler runs twice (real time, then held). Left out: 1
 static uint32_t KickProbeMask() {
@@ -899,21 +900,23 @@ static uint32_t KickProbeMask() {
     static int tick = 0;
     if (tick++ % 120 == 0) {
         uint32_t now = 15, mode = 1;
-        float pin = 0;
+        float pin = 0, apin = 0;
         if (FILE* f = std::fopen("/storage/emulated/0/Black/SaveData/kick_probe.txt", "r")) {
             unsigned v = 0, m = 0;
             float p = 0;
-            int n = std::fscanf(f, "%u %f %u", &v, &p, &m);
+            int n = std::fscanf(f, "%u %f %u %f", &v, &p, &m, &apin);
             if (n >= 1) now = v & 15;
             if (n >= 2 && p >= 0 && p < 60) pin = p;
             if (n >= 3 && m >= 1 && m <= 3) mode = m;
+            if (n < 4 || apin < 0 || apin > 5000) apin = 0;
             std::fclose(f);
         }
-        if (now != mask || pin != g_kick_pin || mode != g_kick_mode) {
+        if (now != mask || pin != g_kick_pin || mode != g_kick_mode || apin != g_aim_pin) {
+            g_aim_pin = apin;
             mask = now;
             g_kick_pin = pin;
             g_kick_mode = mode;
-            DbgLog("kick probe mask=%u pin=%.2f mode=%u\n", mask, pin, mode);
+            DbgLog("kick probe mask=%u pin=%.2f mode=%u aim_pin=%.2f\n", mask, pin, mode, apin);
         }
     }
     return mask;
@@ -1151,7 +1154,8 @@ X86_FUNC(sub_0017B130) {
         {   // EXPERIMENT: once a second while an idle clip plays: what the idle clip does at the aim of the other weapons
             static std::chrono::steady_clock::time_point last_probe;
             static int probes = 0;
-            bool idle_clip_name = clip_name.size() >= 5 && clip_name.compare(clip_name.size() - 5, 5, "S_001") == 0;
+            bool idle_clip_name = clip_name.size() >= 5 && (clip_name.compare(clip_name.size() - 5, 5, "S_001") == 0 ||
+                                                            clip_name.compare(clip_name.size() - 5, 5, "S_190") == 0);
             auto tnow = std::chrono::steady_clock::now();
             if (now_clip && idle_clip_name && probes < 300 && tnow - last_probe > std::chrono::milliseconds(1000)) {
                 last_probe = tnow;
@@ -1169,7 +1173,8 @@ X86_FUNC(sub_0017B130) {
             static float idle_time[2];
             static int idle_logs = 0;
             bool idle_name = clip_name.size() >= 5 && clip_name.compare(clip_name.size() - 5, 5, "S_001") == 0;
-            if (now_clip && idle_name && IdleHoldNow()) {
+            bool aim_name = clip_name.size() >= 5 && clip_name.compare(clip_name.size() - 5, 5, "S_190") == 0;  // G36C / AKM aim clip
+            if (now_clip && (idle_name || aim_name) && IdleHoldNow()) {
                 if (idle_clip != now_clip) {
                     idle_clip = now_clip;
                     idle_time[0] = 0;  // the first frame: the hand on the gun
@@ -1180,8 +1185,9 @@ X86_FUNC(sub_0017B130) {
                                G<float>(now_clip + 0x1C));
                     }
                 }
-                G<float>(now_clip + 0x14) = idle_time[0];
-                G<float>(now_clip + 0x18) = idle_time[1];
+                float hold_at = aim_name ? g_aim_pin : idle_time[0];
+                G<float>(now_clip + 0x14) = hold_at;
+                G<float>(now_clip + 0x18) = hold_at;
             } else {
                 idle_clip = 0;
             }
