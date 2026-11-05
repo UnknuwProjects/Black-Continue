@@ -108,6 +108,7 @@ constexpr Entry kEntries[] = {
     {"INFINITE GRENADES", {u"Grenades infinies", u"Unendliche Granaten", u"Granate infinite", u"Granadas infinitas", u"Granat tak terbatas"}},
     {"RAPID FIRE", {u"Tir rapide", u"Schnellfeuer", u"Fuoco rapido", u"Disparo rápido", u"Tembak cepat"}},
     {"NO RECOIL", {u"Sans recul", u"Kein Rückstoß", u"Nessun rinculo", u"Sin retroceso", u"Tanpa recoil"}},
+    {"STEADY AIM", {u"Visée stable", u"Ruhiges Zielen", u"Mira stabile", u"Puntería estable", u"Bidik stabil"}},
     {"GOD MODE", {u"Invincibilité", u"Unverwundbarkeit", u"Invincibilità", u"Invencibilidad", u"Mode dewa"}},
     {"ONE-HIT KILL", {u"Mort en un coup", u"Ein-Treffer-Kill", u"Uccisione con un colpo", u"Muerte de un golpe", u"Mati sekali tembak"}},
     {"ESP LINES", {u"Lignes ESP", u"ESP-Linien", u"Linee ESP", u"Líneas ESP", u"Garis ESP"}},
