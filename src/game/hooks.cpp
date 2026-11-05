@@ -889,6 +889,32 @@ static uint32_t KickProbeMask() {
     return mask;
 }
 
+// kick 0, v2 (UNVERIFIED hook point until tested): the pose of a clip is sampled by sub_00097E00 (VA 0x97E00), which reads the
+// clip's time at +0x14 / +0x18. The animation events (shell, sound) are tested elsewhere, when the time advances (sub_00097C60 ->
+// 0x97150), so only the sampler sees the held time and the events keep the real one. Times put back right after the sampler.
+// kick_probe.txt: first number & 3 != 0 turns it on (15 = on, 12 = off), second number = the clip time the pose stands at.
+static uint32_t g_kick_ac = 0;  // the player's animation controller, noted by sub_0017B130
+X86_EXTERN_FUNC(__imp__sub_00097E00);
+X86_FUNC(sub_00097E00) {
+    uint32_t clip = R32(ctx.esp + 4);
+    uint32_t ac = g_kick_ac;
+    bool hold = clip && ac && R32(ac + kAnimClip) == clip && R32(ac + kAnimOwner) == Player() &&
+                IsFireClip(ReadCString(ac + kAnimName, 13)) && KickOff() && (KickProbeMask() & 3);
+    if (!hold) return __imp__sub_00097E00(ctx, base);
+    float real14 = G<float>(clip + 0x14), real18 = G<float>(clip + 0x18);
+    G<float>(clip + 0x14) = g_kick_pin;
+    G<float>(clip + 0x18) = g_kick_pin;
+    __imp__sub_00097E00(ctx, base);
+    // what the sampler changed itself (a loop wrap) goes onto the real times
+    G<float>(clip + 0x14) = real14 + (G<float>(clip + 0x14) - g_kick_pin);
+    G<float>(clip + 0x18) = real18 + (G<float>(clip + 0x18) - g_kick_pin);
+    static int logs = 0;
+    if (logs < 30) {
+        logs++;
+        DbgLog("pose hold %s real t14=%.2f held at %.2f\n", ReadCString(ac + kAnimName, 13).c_str(), real14, g_kick_pin);
+    }
+}
+
 // A fire clip that ends before the wait does hands over to the idle early: the request would start it again.
 // An idle fading in over a looping fire clip holds it still instead of running it into its next shot
 X86_EXTERN_FUNC(__imp__sub_0017B130);
@@ -899,19 +925,7 @@ X86_FUNC(sub_0017B130) {
     if (R32(ac + kAnimOwner) != Player() || !clip) return __imp__sub_0017B130(ctx, base);
     int16_t slot = G<int16_t>(clip + kAnimClipFadeSlot);
     uint32_t fade = clip + kAnimClipFades + slot * kFadeSize;
-    // kick in ads_view.txt, 0: the pose of a fire clip stands at its first frame, the gun does not come back at a shot.
-    // The controller keeps the clip's real time: put back before each update, held again after it
-    static const uint32_t kProbeAt[4] = {0x14, 0x18, 0x20, 0x24};
-    static uint32_t held_ac = 0, held_clip = 0, held_mask = 0, held_call = 0, calls = 0;
-    static float real_time[4];
-    static float frozen[4];
-    static uint32_t frozen_clip = 0;
-    calls++;
-    if (held_ac == ac && held_clip == clip) {
-        for (int i = 0; i < 4; i++)
-            if (held_mask & (1u << i)) G<float>(clip + kProbeAt[i]) = real_time[i];
-    }
-    held_clip = 0;
+    g_kick_ac = ac;  // kick 0 is held in sub_00097E00 now, the times of the clip are left alone here
     __imp__sub_0017B130(ctx, base);
     {
         uint32_t now_clip = R32(ac + kAnimClip);
@@ -978,25 +992,6 @@ X86_FUNC(sub_0017B130) {
                                  G<float>(now_clip + 0x14), G<float>(now_clip + 0x18), G<float>(now_clip + 0x1C),
                                  G<float>(now_clip + 0x20), G<float>(now_clip + 0x24));
                     std::fclose(log);
-                }
-            }
-            if (KickOff()) {
-                uint32_t mask = KickProbeMask();
-                // a shot's first frame sets what is held: 0 for +0x14 and +0x18, the time it had for +0x20 and +0x24
-                bool again = held_ac == ac && held_call + 1 == calls && frozen_clip == now_clip;
-                if (!again) {
-                    frozen_clip = now_clip;
-                    frozen[0] = frozen[1] = g_kick_pin;
-                    frozen[2] = G<float>(now_clip + 0x20);
-                    frozen[3] = G<float>(now_clip + 0x24);
-                }
-                held_ac = ac;
-                held_clip = now_clip;
-                held_mask = mask;
-                held_call = calls;
-                for (int i = 0; i < 4; i++) {
-                    real_time[i] = G<float>(now_clip + kProbeAt[i]);
-                    if (mask & (1u << i)) G<float>(now_clip + kProbeAt[i]) = frozen[i];
                 }
             }
         }
