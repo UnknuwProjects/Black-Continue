@@ -239,7 +239,8 @@ static int g_dbg_fire_frames = 0;
 // 1 (or left out) moves the casings with the gun, 0 leaves them, in between a part of it. All after dy may be left out. E.g. "ALL 0.10 0.03",
 // "ASR 0.10 0.03 0 4 0"
 struct AdsMove {
-    float v[9] = {0, 0, 0, 0, 0, 1, 0, 1, 1};  // dx dy dz yaw pitch shell cam recoil kick
+    float v[10] = {0, 0, 0, 0, 0, 1, 0, 1, 1, -1};  // dx dy dz yaw pitch shell cam recoil kick idle (idle: 0 steady at the aim,
+                                                    // 1 the game's, left out (-1): steady for SHG / RM1 only, as before)
 };
 static std::map<std::string, AdsMove> g_ads_shifts;
 static time_t g_ads_stamp = -1;  // the file's change time when it was read
@@ -280,7 +281,7 @@ static void LoadAdsShifts(uint32_t data, const char* type) {
         std::string name;
         AdsMove m;
         if (!(in >> name >> m.v[0] >> m.v[1])) continue;
-        for (int i = 2; i < 9; i++) {
+        for (int i = 2; i < 10; i++) {
             float t;
             if (!(in >> t)) break;
             m.v[i] = t;
@@ -853,14 +854,30 @@ static bool KickOff() {
     return row && row->v[8] <= 0;
 }
 
-// SPAS 12 / Remington at the aim: the idle clip stands where it was when the aim came in (the other weapons have none at
-// the aim). EXPERIMENT: weapon state 1 is taken for ready, +0x14 / +0x18 for the clip's time: both unverified, see
-// the "idle hold" lines of ads_test.log
-static bool OwnIdleHold() {
+// Is the player aiming: the own aim of the SPAS 12 / Remington (weapon state 0 and own_aim up), or the game's own aim of the
+// other weapons (weapon state 31 was seen at the aim of the G36C and the AKM: UNVERIFIED for the other weapons)
+static bool AimingNow() {
     uint32_t weapon = R32(Player() + kPlayerWeapon);
-    if (!weapon || R32(weapon + kWeaponState) != 0 || g_own_aim_pub.load() <= 0.5f) return false;
-    const char* name = TableName(R32(weapon + kWeaponData));
-    return name && (!std::strcmp(name, "SHG") || !std::strcmp(name, "RM1"));
+    if (!weapon) return false;
+    uint32_t state = R32(weapon + kWeaponState);
+    return (state == 0 && g_own_aim_pub.load() > 0.5f) || state == 31;
+}
+
+// The idle clip stands where it was when the aim came in. idle in ads_view.txt (10th number, optional): 0 steady, 1 the
+// game's. Left out: steady for the SPAS 12 and the Remington (as it was), the game's for the rest. At the G36C and the AKM
+// the game holds the idle clip itself at the aim (t14 0 in the log), so 0 changes nothing there: their sway is not this clip.
+// EXPERIMENT: +0x14 / +0x18 for the clip's time, see the "idle hold" lines of ads_test.log
+static bool IdleHoldNow() {
+    uint32_t weapon = R32(Player() + kPlayerWeapon);
+    if (!weapon || !AimingNow()) return false;
+    uint32_t data = R32(weapon + kWeaponData);
+    const AdsMove* row = AdsRow(data);
+    float idle = row ? row->v[9] : -1.0f;
+    if (idle < 0) {
+        const char* name = TableName(data);
+        return name && (!std::strcmp(name, "SHG") || !std::strcmp(name, "RM1"));
+    }
+    return idle <= 0;
 }
 
 // EXPERIMENT: which times of a fire clip kick 0 holds, read from kick_probe.txt beside ads_view.txt (one number, a sum:
@@ -894,10 +911,57 @@ static uint32_t KickProbeMask() {
 // 0x97150), so only the sampler sees the held time and the events keep the real one. Times put back right after the sampler.
 // kick_probe.txt: first number & 3 != 0 turns it on (15 = on, 12 = off), second number = the clip time the pose stands at.
 static uint32_t g_kick_ac = 0;  // the player's animation controller, noted by sub_0017B130
+
+// WOBBLE PROBE (diagnosis, no effect on the game): while aiming and not firing, once a second, every clip the sampler is
+// called with: how often, whether its time t14 moves, its length. A clip whose time keeps moving while the stick and the gyro
+// stand still is the one that sways the gun. main=1 is the clip of the player's animation controller
+struct WobbleClip {
+    int calls = 0, changes = 0;
+    float first = 0, last = 0, len = 0;
+    bool main = false;
+};
+static std::map<uint32_t, WobbleClip> g_wobble;
+static std::chrono::steady_clock::time_point g_wobble_start;
+static int g_wobble_dumps = 0;
+static void WobbleProbe(uint32_t clip, uint32_t ac) {
+    if (g_wobble_dumps >= 40) return;
+    if (!AimingNow() || (ac && IsFireClip(ReadCString(ac + kAnimName, 13)))) {
+        g_wobble.clear();
+        return;
+    }
+    auto now = std::chrono::steady_clock::now();
+    if (g_wobble.empty()) g_wobble_start = now;
+    float t = G<float>(clip + 0x14);
+    WobbleClip& w = g_wobble[clip];
+    if (w.calls == 0) {
+        w.first = t;
+        w.len = G<float>(clip + 0x1C);
+        w.main = ac && R32(ac + kAnimClip) == clip;
+    } else if (t != w.last) {
+        w.changes++;
+    }
+    w.last = t;
+    w.calls++;
+    if (now - g_wobble_start < std::chrono::milliseconds(1000)) return;
+    g_wobble_dumps++;
+    uint32_t weapon = R32(Player() + kPlayerWeapon);
+    const char* wn = weapon ? TableName(R32(weapon + kWeaponData)) : nullptr;
+    DbgLog("wobble probe #%d weapon=%s state=%u own_aim=%.2f clips=%d\n", g_wobble_dumps, wn ? wn : "-",
+           weapon ? R32(weapon + kWeaponState) : 0u, g_own_aim_pub.load(), int(g_wobble.size()));
+    int shown = 0;
+    for (const auto& kv : g_wobble) {
+        if (shown++ >= 14) break;
+        DbgLog("  wobble clip=%08X main=%d calls=%d changes=%d t14 %.2f -> %.2f len=%.1f\n", unsigned(kv.first),
+               int(kv.second.main), kv.second.calls, kv.second.changes, kv.second.first, kv.second.last, kv.second.len);
+    }
+    g_wobble.clear();
+}
+
 X86_EXTERN_FUNC(__imp__sub_00097E00);
 X86_FUNC(sub_00097E00) {
     uint32_t clip = R32(ctx.esp + 4);
     uint32_t ac = g_kick_ac;
+    if (clip) WobbleProbe(clip, ac);
     bool hold = clip && ac && R32(ac + kAnimClip) == clip && R32(ac + kAnimOwner) == Player() &&
                 IsFireClip(ReadCString(ac + kAnimName, 13)) && KickOff() && (KickProbeMask() & 3);
     {   // DIAGNOSIS: is the sampler reached, with which object, and why is the hold off
@@ -915,13 +979,17 @@ X86_FUNC(sub_00097E00) {
     G<float>(clip + 0x14) = g_kick_pin;
     G<float>(clip + 0x18) = g_kick_pin;
     __imp__sub_00097E00(ctx, base);
-    // what the sampler changed itself (a loop wrap) goes onto the real times
-    G<float>(clip + 0x14) = real14 + (G<float>(clip + 0x14) - g_kick_pin);
-    G<float>(clip + 0x18) = real18 + (G<float>(clip + 0x18) - g_kick_pin);
+    // what the sampler changed itself (a loop wrap, the time adjustment) goes onto the real time. The game ends the sampler
+    // by copying t14 into t18 (t18 is the time of the last frame, the animation events are tested between it and t14): so
+    // t18 is made equal to t14 here too. Leaving the old t18 (the first version) stopped the clock and the shells
+    float fixed14 = real14 + (G<float>(clip + 0x14) - g_kick_pin);
+    G<float>(clip + 0x14) = fixed14;
+    G<float>(clip + 0x18) = fixed14;
     static int logs = 0;
-    if (logs < 30) {
+    if (logs < 80) {
         logs++;
-        DbgLog("pose hold %s real t14=%.2f held at %.2f\n", ReadCString(ac + kAnimName, 13).c_str(), real14, g_kick_pin);
+        DbgLog("pose hold %s real t14=%.2f t18=%.2f -> t14=%.2f t18=%.2f held at %.2f\n",
+               ReadCString(ac + kAnimName, 13).c_str(), real14, real18, fixed14, fixed14, g_kick_pin);
     }
 }
 
@@ -1025,7 +1093,7 @@ X86_FUNC(sub_0017B130) {
             static float idle_time[2];
             static int idle_logs = 0;
             bool idle_name = clip_name.size() >= 5 && clip_name.compare(clip_name.size() - 5, 5, "S_001") == 0;
-            if (now_clip && idle_name && OwnIdleHold()) {
+            if (now_clip && idle_name && IdleHoldNow()) {
                 if (idle_clip != now_clip) {
                     idle_clip = now_clip;
                     idle_time[0] = 0;  // the first frame: the hand on the gun
