@@ -284,7 +284,7 @@ static void LoadAdsShifts(uint32_t data, const char* type) {
     static bool tagged = false;
     if (!tagged) {
         tagged = true;
-        DbgLog("build: dbg12 (aim bit fixed 0x80; c9 log + bone_hold.txt FUNC column for 12 functions under sub_0009BEB0)\n");
+        DbgLog("build: dbg13 (aim bit fixed 0x80; c9 log + bone_hold.txt FUNC column + PIN of one bone transform: ARG -1 by id, -2 by call number; c10 log)\n");
     }
     std::ifstream f("/storage/emulated/0/Black/SaveData/ads_view.txt");
     std::string line;
@@ -996,6 +996,10 @@ X86_FUNC(sub_00098450) {
 //                          92570 9BBC0 9BD20 9BC40 9BE70), ARG = stack argument 1..7 holding the time as a float (0 = off),
 //                          CAP = that float is replaced by CAP while it is above it, IDX = call numbers n, "0,3" or "*" for all.
 // The old four column lines (no FUNC) still read, they mean FUNC = 9C0C0.
+// PIN (dbg13): ARG = -1 (FUNC 9BBC0 only) or -2 (FUNC 9BBC0 or 92570). The call is NOT skipped; it runs, and afterwards the 32 bytes
+// it wrote at its first stack argument (the output transform) are put back to the copy taken at the first call whose clip time
+// is >= CAP (CAP 0 = the first sample of the burst). So that one bone stays at that pose while everything else keeps playing.
+// IDX = for -1 the decimal values of the third stack argument of 9BBC0, for -2 the call numbers n. "*" = all.
 static const uint32_t kBhAddr[] = {0x9BEB0, 0x9C2C0, 0x9C0C0, 0x9B160, 0x9B280, 0x9BAB0, 0x93B00, 0x92570, 0x9BBC0, 0x9BD20, 0x9BC40, 0x9BE70};
 static const int kBhN = 12;
 static int g_bh_calls[kBhN];
@@ -1014,6 +1018,7 @@ static void LoadBoneHold() {
                        "# FUNC = hex address: 9BEB0 9C2C0 9C0C0 9B160 9B280 9BAB0 93B00 92570 9BBC0 9BD20 9BC40 9BE70\n"
                        "# ARG = stack argument 1..7 of FUNC that holds the time as a float, 0 = off. CAP = the time is held at this value\n"
                        "# once it is above. IDX = which calls of one sample (0,1,2...) or * for all. See the c9 lines of ads_test.log.\n"
+                       "# PIN: ARG -1 (FUNC 9BBC0, IDX = decimal ids) or -2 (FUNC 9BBC0 or 92570, IDX = call numbers): CAP = t14 where the transform is captured and then held.\n"
                        "ALL 9BEB0 0 0 *\n", w);
             std::fclose(w);
         }
@@ -1053,6 +1058,11 @@ static void LoadBoneHold() {
     }
     g_bone_rules.swap(m);
 }
+// ---- dbg13: PIN of one output transform (see the comment above) and the c10 log ----
+struct PinSnap { uint32_t w[8]; bool have = false; };
+static std::map<std::string, PinSnap> g_pin_snap;
+static int g_c10_lines = 0;
+static std::map<std::string, int> g_c10_shown;
 static std::string g_fetch_weapon;
 static int g_c9_sample = 0, g_c9_lines = 0;
 static std::map<std::string, int> g_c9_detail;
@@ -1079,7 +1089,7 @@ static bool BhEnter(int fid, uint32_t esp0, uint32_t ecx, int& slot, float& save
                 std::snprintf(b, sizeof b, " a%d=%08X(%.3f)", i, a, double(G<float>(esp0 + 4 * i)));
                 s += b;
             }
-            DbgLog("c9 %s f=%05X s=%d n=%d ecx=%08X%s\n", g_fetch_tag.c_str(), unsigned(kBhAddr[fid]), g_c9_sample, n, ecx, s.c_str());
+            DbgLog("c9 %s f=%05X s=%d n=%d ret=%08X ecx=%08X%s\n", g_fetch_tag.c_str(), unsigned(kBhAddr[fid]), g_c9_sample, n, unsigned(R32(esp0)), unsigned(ecx), s.c_str());
             for (int i = 0; i <= 6; i++) {
                 uint32_t a = i ? R32(esp0 + 4 * i) : ecx;
                 if (!PtrOk2(a) || a < 0x100000u) continue;
@@ -1107,6 +1117,62 @@ static bool BhEnter(int fid, uint32_t esp0, uint32_t ecx, int& slot, float& save
 }
 static void BhLeave(uint32_t esp0, bool swap, int slot, float saved) {
     if (swap) G<float>(esp0 + 4 * slot) = saved;
+}
+// Called after sub_0009BBC0 (fid 8) and sub_00092570 (fid 7) returned. dest = their first stack argument, id = third stack argument
+// (9BBC0: an integer), ret_addr = who called, eax = their return value (both return dest when they did their job).
+static void BhAfter(int fid, uint32_t ret_addr, uint32_t eax, int n, uint32_t dest, uint32_t id) {
+    if (!g_fetch_active) return;
+    bool ok = dest >= 0x10000u && !(dest & 3) && eax == dest;
+    if (g_c10_lines < 900) {
+        char key[96];
+        std::snprintf(key, sizeof key, "%s#%d", g_fetch_tag.c_str(), fid);
+        int& shown = g_c10_shown[key];
+        if (shown < 72) {
+            shown++;
+            g_c10_lines++;
+            std::string o;
+            char b[40];
+            if (ok)
+                for (int i = 0; i < 8; i++) {
+                    std::snprintf(b, sizeof b, " %.4f", double(G<float>(dest + 4 * i)));
+                    o += b;
+                }
+            DbgLog("c10 %s f=%05X s=%d t14=%.2f n=%d id=%u ret=%08X dest=%08X eax=%08X ok=%d out:%s\n", g_fetch_tag.c_str(),
+                   unsigned(kBhAddr[fid]), g_c9_sample, double(g_fetch_real), n, unsigned(id), unsigned(ret_addr), unsigned(dest),
+                   unsigned(eax), ok ? 1 : 0, o.c_str());
+        }
+    }
+    if (!ok) return;
+    {   // the pin assumes 32 bytes: a 16 byte vector, then a 16 byte unit quaternion. If the last four words are not one, leave it alone
+        float q = 0;
+        for (int i = 4; i < 8; i++) {
+            float f = G<float>(dest + 4 * i);
+            q += f * f;
+        }
+        if (!(q > 0.9f && q < 1.1f)) return;
+    }
+    const BoneRule* use = nullptr;
+    for (int pass = 0; pass < 2 && !use; pass++)
+        for (const BoneRule& r : g_bone_rules) {
+            if (r.func != kBhAddr[fid] || r.key != (pass == 0 ? g_fetch_weapon : std::string("ALL"))) continue;
+            bool hit = (r.arg == -1 && fid == 8 && (r.all || r.idx.count(int(id)))) || (r.arg == -2 && (r.all || r.idx.count(n)));
+            if (hit) {
+                use = &r;
+                break;
+            }
+        }
+    if (!use) return;
+    char k[128];
+    std::snprintf(k, sizeof k, "%s#%d#%s%d", g_fetch_tag.c_str(), fid, use->arg == -1 ? "i" : "n", use->arg == -1 ? int(id) : n);
+    PinSnap& sn = g_pin_snap[k];
+    if (!sn.have) {
+        if (g_fetch_real >= use->cap) {
+            for (int i = 0; i < 8; i++) sn.w[i] = R32(dest + 4 * i);
+            sn.have = true;
+        }
+        return;
+    }
+    for (int i = 0; i < 8; i++) W32(dest + 4 * i, sn.w[i]);
 }
 X86_EXTERN_FUNC(__imp__sub_0009BEB0);
 X86_FUNC(sub_0009BEB0) {
@@ -1174,20 +1240,26 @@ X86_FUNC(sub_00093B00) {
 X86_EXTERN_FUNC(__imp__sub_00092570);
 X86_FUNC(sub_00092570) {
     uint32_t esp0 = ctx.esp;
+    int n = g_bh_calls[7];
+    uint32_t ret = R32(esp0), dest = R32(esp0 + 4);
     int slot;
     float saved;
     bool sw = BhEnter(7, esp0, ctx.ecx, slot, saved);
     __imp__sub_00092570(ctx, base);
     BhLeave(esp0, sw, slot, saved);
+    BhAfter(7, ret, ctx.eax, n, dest, 0);
 }
 X86_EXTERN_FUNC(__imp__sub_0009BBC0);
 X86_FUNC(sub_0009BBC0) {
     uint32_t esp0 = ctx.esp;
+    int n = g_bh_calls[8];
+    uint32_t ret = R32(esp0), dest = R32(esp0 + 4), id = R32(esp0 + 12);
     int slot;
     float saved;
     bool sw = BhEnter(8, esp0, ctx.ecx, slot, saved);
     __imp__sub_0009BBC0(ctx, base);
     BhLeave(esp0, sw, slot, saved);
+    BhAfter(8, ret, ctx.eax, n, dest, id);
 }
 X86_EXTERN_FUNC(__imp__sub_0009BD20);
 X86_FUNC(sub_0009BD20) {
@@ -1235,6 +1307,11 @@ X86_FUNC(sub_00097E00) {
     std::memset(g_bh_calls, 0, sizeof g_bh_calls);
     g_c9_sample++;
     float real14 = G<float>(clip + 0x14);
+    {   // a new burst (the clip time went back): the pinned transforms are captured again
+        static float prev14 = 1e9f;
+        if (real14 < prev14) g_pin_snap.clear();
+        prev14 = real14;
+    }
     g_fetch_active = true;
     g_fetch_clip = clip;
     g_fetch_real = real14;
