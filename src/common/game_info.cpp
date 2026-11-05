@@ -115,6 +115,7 @@ const app::GameInfo app::kGame = {
                 {"infinite_ammo", &game::Opt().infinite_ammo, nullptr},
                 {"rapid_fire", nullptr, &game::Opt().rapid_fire},
                 {"no_recoil", &game::Opt().no_recoil, nullptr},
+                {"steady_aim", &game::Opt().steady_aim, nullptr},
                 {"game_speed", nullptr, &game::Opt().game_speed},
                 {"god_mode", &game::Opt().god_mode, nullptr},
                 {"one_hit_kill", &game::Opt().one_hit_kill, nullptr},
