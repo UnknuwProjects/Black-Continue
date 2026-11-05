@@ -284,7 +284,7 @@ static void LoadAdsShifts(uint32_t data, const char* type) {
     static bool tagged = false;
     if (!tagged) {
         tagged = true;
-        DbgLog("build: dbg13 (aim bit fixed 0x80; c9 log + bone_hold.txt FUNC column + PIN of one bone transform: ARG -1 by id, -2 by call number; c10 log)\n");
+        DbgLog("build: dbg14 (aim bit fixed 0x80; sub_00098450 watched: c11 log, hold by call number or by caller @ADDR; c9/c10 kept)\n");
     }
     std::ifstream f("/storage/emulated/0/Black/SaveData/ads_view.txt");
     std::string line;
@@ -971,22 +971,6 @@ static void TreeDump(const std::string& tag, uint32_t clip, uint32_t root) {
 }
 static uint32_t g_fetch_clip = 0;
 static float g_fetch_real = 0, g_fetch_cap = 0;
-X86_EXTERN_FUNC(__imp__sub_00098450);
-X86_FUNC(sub_00098450) {
-    if (!g_fetch_active) return __imp__sub_00098450(ctx, base);
-    uint32_t esp0 = ctx.esp;
-    if (R32(esp0 + 4) != g_fetch_clip) return __imp__sub_00098450(ctx, base);
-    {
-        static std::set<std::string> dumped;
-        if (dumped.insert(g_fetch_tag).second) TreeDump(g_fetch_tag, g_fetch_clip, R32(esp0 + 8));
-    }
-    float cur = G<float>(esp0 + 0x10);
-    bool swap = g_fetch_cap > 0 && std::fabs(cur - g_fetch_real) < 0.51f && cur > g_fetch_cap;
-    if (swap) G<float>(esp0 + 0x10) = g_fetch_cap;
-    __imp__sub_00098450(ctx, base);
-    if (swap) G<float>(esp0 + 0x10) = cur;
-}
-
 // BONE HOLD (EXPERIMENT, dbg12). The functions below are the ones sub_0009BEB0 (the pose of a type 0 leaf) calls, plus the
 // 0x9C2C0 / 0x9C0C0 pair of the other path. While the sampler of the player's fire clip runs, every call is counted per function
 // (n = 0, 1, 2 ... within one sample) and the first ones are written to ads_test.log ("c9" lines: ecx, the six stack words and the
@@ -996,14 +980,16 @@ X86_FUNC(sub_00098450) {
 //                          92570 9BBC0 9BD20 9BC40 9BE70), ARG = stack argument 1..7 holding the time as a float (0 = off),
 //                          CAP = that float is replaced by CAP while it is above it, IDX = call numbers n, "0,3" or "*" for all.
 // The old four column lines (no FUNC) still read, they mean FUNC = 9C0C0.
+// dbg14: FUNC 98450 (the keyframe fetch of the sampler, only the calls for the player's fire clip) is watched too. Its time is
+// stack argument 4. IDX may also be @ADDR[,ADDR] (hex): the calls made from those return addresses (93906 96C80 96E42 96EEA).
 // PIN (dbg13): ARG = -1 (FUNC 9BBC0 only) or -2 (FUNC 9BBC0 or 92570). The call is NOT skipped; it runs, and afterwards the 32 bytes
 // it wrote at its first stack argument (the output transform) are put back to the copy taken at the first call whose clip time
 // is >= CAP (CAP 0 = the first sample of the burst). So that one bone stays at that pose while everything else keeps playing.
 // IDX = for -1 the decimal values of the third stack argument of 9BBC0, for -2 the call numbers n. "*" = all.
-static const uint32_t kBhAddr[] = {0x9BEB0, 0x9C2C0, 0x9C0C0, 0x9B160, 0x9B280, 0x9BAB0, 0x93B00, 0x92570, 0x9BBC0, 0x9BD20, 0x9BC40, 0x9BE70};
-static const int kBhN = 12;
+static const uint32_t kBhAddr[] = {0x9BEB0, 0x9C2C0, 0x9C0C0, 0x9B160, 0x9B280, 0x9BAB0, 0x93B00, 0x92570, 0x9BBC0, 0x9BD20, 0x9BC40, 0x9BE70, 0x98450};
+static const int kBhN = 13;
 static int g_bh_calls[kBhN];
-struct BoneRule { std::string key; uint32_t func = 0; int arg = 0; float cap = 0; bool all = false; std::set<int> idx; };
+struct BoneRule { std::string key; uint32_t func = 0; int arg = 0; float cap = 0; bool all = false; std::set<int> idx; std::set<uint32_t> ret; };
 static std::vector<BoneRule> g_bone_rules;
 static std::chrono::steady_clock::time_point g_bone_checked;
 static void LoadBoneHold() {
@@ -1018,6 +1004,7 @@ static void LoadBoneHold() {
                        "# FUNC = hex address: 9BEB0 9C2C0 9C0C0 9B160 9B280 9BAB0 93B00 92570 9BBC0 9BD20 9BC40 9BE70\n"
                        "# ARG = stack argument 1..7 of FUNC that holds the time as a float, 0 = off. CAP = the time is held at this value\n"
                        "# once it is above. IDX = which calls of one sample (0,1,2...) or * for all. See the c9 lines of ads_test.log.\n"
+                       "# 98450: time is ARG 4. IDX = call numbers or @96C80,96E42 (return addresses of the callers: 93906 96C80 96E42 96EEA).\n"
                        "# PIN: ARG -1 (FUNC 9BBC0, IDX = decimal ids) or -2 (FUNC 9BBC0 or 92570, IDX = call numbers): CAP = t14 where the transform is captured and then held.\n"
                        "ALL 9BEB0 0 0 *\n", w);
             std::fclose(w);
@@ -1049,7 +1036,11 @@ static void LoadBoneHold() {
             ids = t[3];
         } else continue;
         if (ids == "*") r.all = true;
-        else {
+        else if (!ids.empty() && ids[0] == '@') {   // @96C80,96E42 = the calls whose return address is one of these (hex)
+            std::istringstream is(ids.substr(1));
+            std::string x;
+            while (std::getline(is, x, ',')) if (!x.empty()) r.ret.insert(uint32_t(std::strtoul(x.c_str(), nullptr, 16)));
+        } else {
             std::istringstream is(ids);
             std::string x;
             while (std::getline(is, x, ',')) if (!x.empty()) r.idx.insert(std::atoi(x.c_str()));
@@ -1063,6 +1054,7 @@ struct PinSnap { uint32_t w[8]; bool have = false; };
 static std::map<std::string, PinSnap> g_pin_snap;
 static int g_c10_lines = 0;
 static std::map<std::string, int> g_c10_shown;
+static std::map<uint32_t, int> g_h_callers;   // dbg14: calls of sub_00098450 per return address in this sample
 static std::string g_fetch_weapon;
 static int g_c9_sample = 0, g_c9_lines = 0;
 static std::map<std::string, int> g_c9_detail;
@@ -1103,7 +1095,7 @@ static bool BhEnter(int fid, uint32_t esp0, uint32_t ecx, int& slot, float& save
     for (int pass = 0; pass < 2 && !use; pass++)
         for (const BoneRule& r : g_bone_rules)
             if (r.func == kBhAddr[fid] && r.key == (pass == 0 ? g_fetch_weapon : std::string("ALL")) && r.arg >= 1 && r.arg <= 7 &&
-                r.cap > 0 && (r.all || r.idx.count(n))) {
+                r.cap > 0 && (r.all || r.idx.count(n) || r.ret.count(R32(esp0)))) {
                 use = &r;
                 break;
             }
@@ -1289,6 +1281,41 @@ X86_FUNC(sub_0009BE70) {
     BhLeave(esp0, sw, slot, saved);
 }
 
+X86_EXTERN_FUNC(__imp__sub_00098450);
+X86_FUNC(sub_00098450) {
+    if (!g_fetch_active) return __imp__sub_00098450(ctx, base);
+    uint32_t esp0 = ctx.esp;
+    if (R32(esp0 + 4) != g_fetch_clip) return __imp__sub_00098450(ctx, base);
+    {
+        static std::set<std::string> dumped;
+        if (dumped.insert(g_fetch_tag).second) TreeDump(g_fetch_tag, g_fetch_clip, R32(esp0 + 8));
+    }
+    float cur = G<float>(esp0 + 0x10);
+    uint32_t ret = R32(esp0);
+    int n = g_bh_calls[12];
+    g_h_callers[ret]++;
+    int slot;
+    float saved;
+    bool hw = BhEnter(12, esp0, ctx.ecx, slot, saved);   // counts the call, c9 lines, hold by bone_hold.txt (FUNC 98450, ARG 4)
+    {
+        static std::map<std::string, int> shown;
+        static int total = 0;
+        int& sh = shown[g_fetch_tag];
+        if (sh < 90 && total < 500) {
+            sh++;
+            total++;
+            DbgLog("c11 %s s=%d t14=%.2f n=%d ret=%08X a2=%08X a3=%08X a4=%08X(%.3f) a5=%08X a6=%08X\n", g_fetch_tag.c_str(), g_c9_sample,
+                   double(g_fetch_real), n, unsigned(ret), unsigned(R32(esp0 + 8)), unsigned(R32(esp0 + 12)), unsigned(R32(esp0 + 16)),
+                   double(G<float>(esp0 + 16)), unsigned(R32(esp0 + 20)), unsigned(R32(esp0 + 24)));
+        }
+    }
+    bool swap = !hw && g_fetch_cap > 0 && std::fabs(cur - g_fetch_real) < 0.51f && cur > g_fetch_cap;
+    if (swap) G<float>(esp0 + 0x10) = g_fetch_cap;
+    __imp__sub_00098450(ctx, base);
+    if (swap) G<float>(esp0 + 0x10) = cur;
+    BhLeave(esp0, hw, slot, saved);
+}
+
 X86_EXTERN_FUNC(__imp__sub_00097E00);
 X86_FUNC(sub_00097E00) {
     uint32_t clip = R32(ctx.esp + 4);
@@ -1305,6 +1332,7 @@ X86_FUNC(sub_00097E00) {
         g_fetch_tag = g_fetch_weapon + "_" + ReadCString(ac + kAnimName, 13);
     }
     std::memset(g_bh_calls, 0, sizeof g_bh_calls);
+    g_h_callers.clear();
     g_c9_sample++;
     float real14 = G<float>(clip + 0x14);
     {   // a new burst (the clip time went back): the pinned transforms are captured again
@@ -1331,6 +1359,12 @@ X86_FUNC(sub_00097E00) {
                 cnt += cb;
             }
             DbgLog("c9 sample %s s=%d t14=%.2f calls:%s\n", g_fetch_tag.c_str(), g_c9_sample, real14, cnt.c_str());
+            std::string cl;
+            for (const auto& kv : g_h_callers) {
+                std::snprintf(cb, sizeof cb, " %05X=%d", unsigned(kv.first), kv.second);
+                cl += cb;
+            }
+            DbgLog("c11 sample %s s=%d t14=%.2f calls98450=%d callers:%s\n", g_fetch_tag.c_str(), g_c9_sample, real14, g_bh_calls[12], cl.c_str());
         }
     }
     if (cap > 0) {   // one line per burst: how far the clip got, to choose a cap (at most 12 lines per weapon and clip)
