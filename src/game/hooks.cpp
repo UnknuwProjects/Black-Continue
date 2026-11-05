@@ -246,6 +246,8 @@ static std::map<std::string, AdsMove> g_ads_shifts;
 static time_t g_ads_stamp = -1;  // the file's change time when it was read
 static std::chrono::steady_clock::time_point g_ads_checked;
 static float g_vm[5] = {};     // the move of the gun's matrix this frame: dx dy dz yaw pitch
+static float g_vm_blend = 0;   // how far the aim is in (1 - hip) at the last AdsShift
+static long g_vm_ms = -1000000; // DbgMs() of the last AdsShift: a g_vm older than that is stale
 static float g_shell = 0;      // 1: the casings go along
 static float g_cam = 0;        // 1: the camera keeps its view at the aim, the gun comes to it instead
 static float g_shift[4] = {};  // the old moves on the draws and the effects: left at nothing, the matrix has it now
@@ -272,7 +274,7 @@ static void LoadAdsShifts(uint32_t data, const char* type) {
     static bool tagged = false;
     if (!tagged) {
         tagged = true;
-        DbgLog("build: dbg3 (kick modes 1-3, wobble probe by aim)\n");
+        DbgLog("build: dbg4 (idle hold only at a fresh aim, aim shown in the idle probe)\n");
     }
     std::ifstream f("/storage/emulated/0/Black/SaveData/ads_view.txt");
     std::string line;
@@ -338,6 +340,8 @@ static const AdsMove* AdsRow(uint32_t data) {
 
 static void AdsShift(uint32_t data, float hip) {
     float blend = 1 - hip;
+    g_vm_blend = blend;
+    g_vm_ms = DbgMs();
     for (float& v : g_vm) v = 0;
     g_shell = 0;
     g_cam = 0;
@@ -861,8 +865,10 @@ static bool AimingNow() {
     if (!weapon) return false;
     uint32_t state = R32(weapon + kWeaponState);
     // g_vm: the aim's move of ads_view.txt is on (the "aim=1" of the fire lines), seen at every weapon with a row that moves
+    // a g_vm left over from the last aim (AdsShift not run since) or a blend still near the hip is NOT an aim: the idle must run at the hip
     bool moved = false;
     for (float v : g_vm) moved = moved || v != 0;
+    moved = moved && g_vm_blend > 0.5f && DbgMs() - g_vm_ms < 150;
     return (state == 0 && g_own_aim_pub.load() > 0.5f) || state == 31 || moved;
 }
 
@@ -1152,8 +1158,9 @@ X86_FUNC(sub_0017B130) {
                 probes++;
                 uint32_t pw = R32(Player() + kPlayerWeapon);
                 const char* pn = pw ? TableName(R32(pw + kWeaponData)) : nullptr;
-                DbgLog("idle probe %s weapon=%s state=%u own_aim=%.2f t14=%.2f t18=%.2f len=%.1f\n", clip_name.c_str(),
-                       pn ? pn : "-", pw ? R32(pw + kWeaponState) : 0u, g_own_aim_pub.load(), G<float>(now_clip + 0x14),
+                DbgLog("idle probe %s weapon=%s state=%u own_aim=%.2f aiming=%d blend=%.2f vm_age=%ld t14=%.2f t18=%.2f len=%.1f\n",
+                       clip_name.c_str(), pn ? pn : "-", pw ? R32(pw + kWeaponState) : 0u, g_own_aim_pub.load(),
+                       int(AimingNow()), g_vm_blend, DbgMs() - g_vm_ms, G<float>(now_clip + 0x14),
                        G<float>(now_clip + 0x18), G<float>(now_clip + 0x1C));
             }
         }
