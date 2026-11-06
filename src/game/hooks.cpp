@@ -231,11 +231,6 @@ static void DbgLog(const char* fmt, ...) {
     va_end(args);
     std::fclose(log);
 }
-// what the animation hook (sub_0017B130) last saw of the player's weapon clip, read by the shell birth log
-static char g_dbg_clip[16] = "-";
-static float g_dbg_t14 = 0;
-static int g_dbg_slot = -1;
-static int g_dbg_fire_frames = 0;
 
 // The gun at the aim: in the middle of the view. The game builds the first person gun's matrix once a frame
 // (player + 0x420, in view units: x left on the screen, y up, z ahead, the last row its position) and the gun's model, the
@@ -279,47 +274,157 @@ static const char* TableName(uint32_t data) {
     return index < kTableCount ? kTableNames[index] : nullptr;
 }
 
-static void LoadAdsShifts(uint32_t data, const char* type) {
-    g_ads_shifts.clear();
+static int g_ads_src = -1;  // which table g_ads_shifts holds: 0 the built in one, 1 ADS_Custom.txt
+
+static void LogAdsLoad(uint32_t data, const char* type, int src) {
     static bool tagged = false;
     if (!tagged) {
         tagged = true;
-        DbgLog("build: dbg17 (PLAN D + c18 other clips, c19 controllers, CLP rule; c16 event log, EVT rule; OUT/OUTK pose output rules: node handlers T0-T25 wrapped: c12 per node, c13 per sample, hold by T<type> in bone_hold.txt; c10w c14 pose logs; dbg14 kept)\n");
+        DbgLog("build: dbg18c (clean: menu AIM VIEW / NO WEAPON KICK / ADS MODE, steady aim, no experiment hooks)\n");
     }
-    std::ifstream f("/storage/emulated/0/Black/SaveData/ads_view.txt");
+    if (FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/ads_test.log", "a")) {
+        std::fprintf(log, "aim in: data=%08X type=%s, %u lines, source=%s\n", unsigned(data), type,
+                     unsigned(g_ads_shifts.size()), src ? "ADS_Custom.txt" : "built in");
+        std::fclose(log);
+    }
+}
+
+// The built in table: ads_view.txt as it was, value for value (the "Steady" column is the menu's now, the kick column is not
+// read). dx dy dz yaw pitch shell cam recoil kick. No SNR row (it fell to ALL before, it still does), RPG as the file had it
+struct AdsDefaultRow { const char* name; float v[9]; };
+static const AdsDefaultRow kAdsDefaults[] = {
+    {"ALL", {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0, 0, 1, 1}},
+    {"PST", {0.0800f, 0.065f, 0.290f, -0.40f, 2.0f, 1, 0, 1, 1}},
+    {"SMG", {0.117f, 0.032f, -0.021f, 1.00f, 2.9f, 1, 0, 1, 0}},
+    {"ASR", {0.078f, 0.020f, 0.035f, -0.38f, 0.56f, 1, 0, 1, 0}},
+    {"HVY", {0.060f, -0.001f, 0.2f, -3.50f, 1.5f, 1, 0, 1, 0}},
+    {"GK1", {0.0800f, 0.060f, 0.1f, -0.30f, -0.12f, 1, 0, 1, 1}},
+    {"MGN", {0.0750f, 0.030f, 0.15f, -5.0f, 1.0f, 1, 0, 1, 1}},   // the file had -05, which reads as -5
+    {"SM3", {0.125f, 0.002f, -0.01f, -1.00f, -1.0f, 1, 0, 1, 0}},
+    {"P90", {0.0810f, -0.031f, -0.080f, -3.80f, -2.0f, 1, 0, 1, 0}},
+    {"MP1", {0.0458f, 0.00f, -0.065f, -2.50f, -2.5f, 1, 0, 1, 0}},
+    {"AK1", {0.101f, 0.029f, -0.010f, 3.60f, 0.50f, 1, 0, 1, 0}},
+    {"M16", {0.0738f, 0.015f, 0.180f, 0.28f, 5.0f, 1, 0, 1, 0}},
+    {"BNS", {0.114f, -0.010f, 0.043f, 0.28f, 1.30f, 1, 0, 1, 0}},
+    {"GRL", {0.119f, 0.035f, 0.035f, -3.95f, -4.0f, 1, 0, 1, 1}},
+    {"SHG", {0.072f, 0.030f, 0.1f, -2.00f, 4.0f, 1, 0, 1, 1}},
+    {"RM1", {0.053f, 0.023f, 0.1f, -2.00f, 1.0f, 1, 0, 1, 1}},
+    {"RPG", {0, 0, 0, 0, 0, 0, 0, 1, 1}},
+};
+
+static void LoadAdsDefaults(uint32_t data, const char* type) {
+    g_ads_shifts.clear();
+    for (const AdsDefaultRow& r : kAdsDefaults) {
+        AdsMove m;
+        for (int i = 0; i < 9; i++) m.v[i] = r.v[i];
+        m.v[9] = 0;
+        g_ads_shifts[r.name] = m;
+    }
+    LogAdsLoad(data, type, 0);
+}
+
+// ADS_Custom.txt in SaveData: a table, one weapon a line, the columns apart by | and any number of spaces, # starts a note.
+// Made with every value 0 when it is not there. Columns: dx dy dz yaw pitch shell cam. Recoil is the game's. A weapon with no
+// line (and no ALL line) is left to the game, no move
+static const char* const kAdsCustomPath = "/storage/emulated/0/Black/SaveData/ADS_Custom.txt";
+static void WriteAdsCustomTemplate() {
+    FILE* w = std::fopen(kAdsCustomPath, "w");
+    if (!w) return;
+    std::fputs(
+        "#==================== ADS_Custom.txt: ADS MODE = CUSTOM ====================\n"
+        "# Tiap baris: SENJATA lalu 7 angka, dipisah tanda | (boleh juga spasi saja). Awalan # = catatan, tidak dibaca.\n"
+        "# Semua nilai awal 0. Simpan file, tunggu 1-2 detik, hasil langsung terlihat (tidak perlu buka ulang game).\n"
+        "#\n"
+        "# KOLOM (kiri ke kanan):\n"
+        "#  dx     : geser senjata KIRI (+) / KANAN (-)\n"
+        "#  dy     : geser senjata NAIK (+) / TURUN (-)\n"
+        "#  dz     : geser senjata MENJAUH dari mata (+) / MENDEKAT (-)\n"
+        "#  yaw    : putar moncong ke KIRI (+) / KANAN (-), derajat\n"
+        "#  pitch  : putar moncong NAIK (+) / TURUN (-), derajat\n"
+        "#  shell  : selongsong ikut bergeser: 1 ikut, 0 tidak, di antaranya sebagian\n"
+        "#  cam    : kamera tetap tidak zoom: 1 tetap, 0 zoom bawaan game, di antaranya sebagian\n"
+        "# Langkah geser kira-kira 0.01 sampai 0.05. Kalau 0 semua, senjata tidak bergeser.\n"
+        "# Baris yang tidak ada = senjata itu bawaan game. Baris ALL berlaku untuk senjata tanpa baris sendiri.\n"
+        "#\n"
+        "#------+--------+--------+--------+--------+--------+--------+--------+---------------------\n"
+        "# KEY  |   dx   |   dy   |   dz   |  yaw   | pitch  | shell  |  cam   | Nama senjata\n"
+        "#------+--------+--------+--------+--------+--------+--------+--------+---------------------\n"
+        "PST    |   0    |   0    |   0    |   0    |   0    |   0    |   0    | # PISTOL\n"
+        "GK1    |   0    |   0    |   0    |   0    |   0    |   0    |   0    | # Glock\n"
+        "MGN    |   0    |   0    |   0    |   0    |   0    |   0    |   0    | # Magnum\n"
+        "SMG    |   0    |   0    |   0    |   0    |   0    |   0    |   0    | # UZI\n"
+        "SM3    |   0    |   0    |   0    |   0    |   0    |   0    |   0    | # Mac-10\n"
+        "MP1    |   0    |   0    |   0    |   0    |   0    |   0    |   0    | # MP5\n"
+        "P90    |   0    |   0    |   0    |   0    |   0    |   0    |   0    | # P90\n"
+        "ASR    |   0    |   0    |   0    |   0    |   0    |   0    |   0    | # G36C\n"
+        "AK1    |   0    |   0    |   0    |   0    |   0    |   0    |   0    | # AKM\n"
+        "M16    |   0    |   0    |   0    |   0    |   0    |   0    |   0    | # M16\n"
+        "BNS    |   0    |   0    |   0    |   0    |   0    |   0    |   0    | # M16A2 + M203\n"
+        "HVY    |   0    |   0    |   0    |   0    |   0    |   0    |   0    | # M249\n"
+        "GRL    |   0    |   0    |   0    |   0    |   0    |   0    |   0    | # Grenade Launcher\n"
+        "SHG    |   0    |   0    |   0    |   0    |   0    |   0    |   0    | # Spas 12 (bidik lewat tombol AIM)\n"
+        "RM1    |   0    |   0    |   0    |   0    |   0    |   0    |   0    | # Remington (bidik lewat tombol AIM)\n"
+        "#------+--------+--------+--------+--------+--------+--------+--------+---------------------\n",
+        w);
+    std::fclose(w);
+}
+
+static void LoadAdsShifts(uint32_t data, const char* type) {
+    g_ads_shifts.clear();
+    std::ifstream f(kAdsCustomPath);
+    if (!f) {
+        WriteAdsCustomTemplate();
+        LogAdsLoad(data, type, 1);
+        return;
+    }
     std::string line;
     while (std::getline(f, line)) {
+        size_t hash = line.find('#');
+        if (hash != std::string::npos) line.erase(hash);
+        for (char& c : line) if (c == '|') c = ' ';
         std::istringstream in(line);
         std::string name;
         AdsMove m;
         if (!(in >> name >> m.v[0] >> m.v[1])) continue;
-        for (int i = 2; i < 10; i++) {
+        for (int i = 2; i < 7; i++) {   // dz yaw pitch shell cam; recoil, kick and idle stay at their own
             float t;
             if (!(in >> t)) break;
             m.v[i] = t;
         }
         g_ads_shifts[name] = m;
     }
-    if (FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/ads_test.log", "a")) {
-        std::fprintf(log, "aim in: data=%08X type=%s, %u lines\n", unsigned(data), type, unsigned(g_ads_shifts.size()));
-        std::fclose(log);
-    }
+    LogAdsLoad(data, type, 1);
 }
 
 // The weapon's row of ads_view.txt: its own, then its class's, then ALL. The file is looked at twice a second: saved
 // again, it is read again, no new level needed. Used at the aim and by the recoil
 static const AdsMove* AdsRow(uint32_t data) {
     if (!data) return nullptr;
+    const game::Options& opt = game::Opt();
+    if (opt.aim_view == 0) return nullptr;  // ZOOM: the game's own aim, nothing moves, the recoil is the game's
     char type[4] = {};
     std::memcpy(type, HostPtr(data + 0x130), 3);  // the type code, "ASR", "SMG", "PST"...
+    int src = opt.ads_custom ? 1 : 0;
     auto now = std::chrono::steady_clock::now();
+    if (src != g_ads_src) {   // the menu's ADS MODE changed: the other table now
+        g_ads_src = src;
+        g_ads_stamp = -1;
+        g_ads_checked = now - std::chrono::seconds(1);
+    }
     if (g_ads_stamp == -1 || now - g_ads_checked > std::chrono::milliseconds(500)) {
         g_ads_checked = now;
-        struct stat st;
-        time_t stamp = stat("/storage/emulated/0/Black/SaveData/ads_view.txt", &st) == 0 ? st.st_mtime : 0;
-        if (stamp != g_ads_stamp) {
-            g_ads_stamp = stamp;
-            LoadAdsShifts(data, type);
+        if (src == 0) {
+            if (g_ads_stamp == -1) {
+                g_ads_stamp = 0;
+                LoadAdsDefaults(data, type);
+            }
+        } else {
+            struct stat st;
+            time_t stamp = stat(kAdsCustomPath, &st) == 0 ? st.st_mtime : 0;
+            if (stamp != g_ads_stamp) {
+                g_ads_stamp = stamp;
+                LoadAdsShifts(data, type);
+            }
         }
     }
     const char* name = TableName(data);
@@ -399,34 +504,11 @@ void ViewmodelShift(X86Context& ctx, uint8_t*) {
 // made from the gun's locator before the aim's move reached it. Its position is small numbers (about -0.07 -0.08 0.25
 // in the log, the eye is far off in the world), so it is in the gun's own space, not the world's: the aim's turn and
 // move are added to it as they are to the gun's matrix, not along the camera's axes. shell in ads_view.txt scales
-// the move and the turn: 1 whole, 0 none. The first ones are written to ads_test.log
+// the move and the turn: 1 whole, 0 none.
 void ShellShift(X86Context& ctx, uint8_t*) {
     uint32_t player = R32(ctx.ebp + 8);
-    {   // every birth of the player's shell, before anything is changed: how many a shot makes, from where, in which clip
-        static int births = 0;
-        if (births < 300 && player == Player()) {
-            births++;
-            uint32_t weapon = R32(Player() + kPlayerWeapon);
-            const char* wname = weapon ? TableName(R32(weapon + kWeaponData)) : nullptr;
-            const float* p0 = &G<float>(ctx.ebx + 0x40);
-            DbgLog("shell birth #%d ms=%ld rec=%08X ret=%08X weapon=%s clip=%s slot=%d t14=%.2f ffr=%d g_shell=%.2f "
-                   "vm=(%.3f %.3f %.3f) pos=(%.3f %.3f %.3f)\n",
-                   births, DbgMs(), unsigned(ctx.ebx), unsigned(R32(ctx.ebp + 4)), wname ? wname : "?", g_dbg_clip,
-                   g_dbg_slot, g_dbg_t14, g_dbg_fire_frames, g_shell, g_vm[0], g_vm[1], g_vm[2], p0[0], p0[1], p0[2]);
-        }
-    }
-    static int calls = 0;
-    if (calls < 4) {  // does the hook run at all, and with what: to ads_test.log
-        calls++;
-        if (FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/ads_test.log", "a")) {
-            std::fprintf(log, "shell call: arg=%08X player=%08X g_shell=%.2f move=%.3f %.3f %.3f\n", unsigned(player),
-                         unsigned(Player()), g_shell, g_vm[0], g_vm[1], g_vm[2]);
-            std::fclose(log);
-        }
-    }
     if (player != Player() || g_shell == 0 || (!g_vm[0] && !g_vm[1] && !g_vm[2] && !g_vm[3] && !g_vm[4])) return;
     float* pos = &G<float>(ctx.ebx + 0x40);
-    float before[3] = {pos[0], pos[1], pos[2]};
     constexpr float kPi = 3.14159265f;
     constexpr float kPivot = 0.6f;
     float yaw = g_vm[3] * g_shell * kPi / 180, pitch = g_vm[4] * g_shell * kPi / 180;
@@ -442,16 +524,6 @@ void ShellShift(X86Context& ctx, uint8_t*) {
         pos[2] = z + kPivot;
     }
     for (int i = 0; i < 3; i++) pos[i] += g_shell * g_vm[i];
-    static int logged = 0;
-    if (logged < 6) {
-        logged++;
-        if (FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/ads_test.log", "a")) {
-            std::fprintf(log, "shell: pos=(%.3f %.3f %.3f) -> (%.3f %.3f %.3f) move=(%.3f %.3f %.3f) turn=(%.2f %.2f)\n",
-                         before[0], before[1], before[2], pos[0], pos[1], pos[2], g_vm[0], g_vm[1], g_vm[2], g_vm[3],
-                         g_vm[4]);
-            std::fclose(log);
-        }
-    }
 }
 
 // Is the gun's picture anywhere but where the game puts it: grown by the viewmodel setting or moved by the aim
@@ -525,47 +597,13 @@ void FieldOfView(X86Context& ctx, uint8_t*) {
     bool own = mine && aim <= 1 && name && (!std::strcmp(name, "SHG") || !std::strcmp(name, "RM1"));
     if (own) {
         bool held = G<uint8_t>(ctx.ecx + 0x105) != 0 || OwnAimHeld();
-        static int last = -1, logged = 0;
-        static uint32_t last_bits = 0;
-        uint32_t bits = PadBits();
-        if ((last != int(held) || bits != last_bits) && logged < 40) {  // what the pad does at this weapon: to ads_test.log
-            last = held;
-            last_bits = bits;
-            logged++;
-            if (FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/ads_test.log", "a")) {
-                std::fprintf(log, "own aim: %s held=%d byte105=%u pad=%08X aim_bit=%08X\n", name, int(held),
-                             unsigned(G<uint8_t>(ctx.ecx + 0x105)), unsigned(bits), unsigned(g_aim_bit));
-                std::fclose(log);
-            }
-        }
         g_own_aim += ((held ? 1.0f : 0.0f) - g_own_aim) * (1 - std::pow(0.75f, FrameShare()));
         if (g_own_aim > 0.999f) g_own_aim = 1;
         if (g_own_aim < 0.001f) g_own_aim = 0;
         g_own_aim_pub = g_own_aim;
         hip = 1 - g_own_aim;
-        static int own_frames = 0;  // each call while the aim is held or on its way: how steady the button and the aim are
-        if ((held || g_own_aim > 0) && own_frames < 800) {
-            own_frames++;
-            DbgLog("own frame #%d ms=%ld %s held=%d pad=%08X own_aim=%.3f\n", own_frames, DbgMs(), name, int(held),
-                   unsigned(PadBits()), g_own_aim);
-        }
     } else if (mine) {
         if (aim > 1) LearnAim(G<uint8_t>(ctx.ecx + 0x105) != 0);
-        if (name) {  // each weapon's zoom once, to compare with kOwnAimZoom
-            static std::map<std::string, bool> zoom_logged;
-            if (!zoom_logged[name] && zoom_logged.size() <= 24) {
-                zoom_logged[name] = true;
-                DbgLog("aim zoom %s=%.3f\n", name, aim);
-            }
-        }
-        if (g_own_aim != 0) {  // something else than the SPAS 12 / Remington sends the aim back to 0
-            static int resets = 0;
-            if (resets < 100) {
-                resets++;
-                DbgLog("own aim RESET ms=%ld by weapon=%s data=%08X aim=%.2f was=%.3f\n", DbgMs(), name ? name : "?",
-                       unsigned(data), aim, g_own_aim);
-            }
-        }
         g_own_aim = 0;
         g_own_aim_pub = 0;
         g_own_toggle = false;  // another weapon: the next SPAS 12 / Remington starts at the hip
@@ -612,16 +650,6 @@ static void AdsOffset(float* v, float depth) {
     bool axes = std::fabs(dot(right, right) - 1) < 0.02f && std::fabs(dot(up, up) - 1) < 0.02f &&
                 std::fabs(dot(right, forward)) < 0.02f && std::fabs(dot(up, forward)) < 0.02f &&
                 std::fabs(dot(right, up)) < 0.02f;
-    static bool logged = false;
-    if (!logged) {
-        logged = true;
-        if (FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/ads_test.log", "a")) {
-            std::fprintf(log, "effects: axes %s right=(%.3f %.3f %.3f) up=(%.3f %.3f %.3f) forward=(%.3f %.3f %.3f)\n",
-                         axes ? "ok" : "NOT a view's, effects stay", right[0], right[1], right[2], up[0], up[1], up[2],
-                         forward[0], forward[1], forward[2]);
-            std::fclose(log);
-        }
-    }
     if (!axes) return;
     float sx = 0, sy = 0;
     d3d::GunScale(sx, sy);
@@ -852,17 +880,22 @@ static void LoadCaps() {
     }
     g_caps.swap(caps);
 }
+// NO WEAPON KICK (menu): the fire clip's pose is held at this clip time, so the kick never plays. The events (shells, sound)
+// keep the real time. UNVERIFIED value: 1.0 is the first frame; recoil_cap.txt (a weapon's own line or ALL, above 0) overrides it
+// to tune it. Menu off: the game's own, the file is not looked at
+static constexpr float kNoKickCap = 1.0f;
 static float RecoilCap() {
     uint32_t weapon = R32(Player() + kPlayerWeapon);
     if (!weapon) return 0;
     const char* name = TableName(R32(weapon + kWeaponData));
     if (!name || !std::strcmp(name, "RPG") || !std::strcmp(name, "SNR")) return 0;
+    if (!game::Opt().no_kick) return 0;
     LoadCaps();
     auto it = g_caps.find(name);
-    if (it == g_caps.end()) it = g_caps.find("ALL");
-    return it == g_caps.end() ? 0.0f : std::max(it->second, 0.0f);
+    if (it == g_caps.end() || it->second <= 0) it = g_caps.find("ALL");
+    if (it != g_caps.end() && it->second > 0) return it->second;
+    return kNoKickCap;
 }
-static bool KickOff() { return RecoilCap() > 0; }
 
 // Is the player aiming: the own aim of the SPAS 12 / Remington (weapon state 0 and own_aim up), weapon state 31 (seen at the
 // aim of the G36C and the AKM in an older log, not in the last ones), or the aim's move of ads_view.txt being on (g_vm)
@@ -900,1056 +933,45 @@ static void AimPinRefresh() {
         if (n < 4 || apin < 0 || apin > 5000) apin = 30;
         std::fclose(f);
     }
-    if (apin != g_aim_pin) {
-        g_aim_pin = apin;
-        DbgLog("aim pin=%.2f\n", apin);
-    }
+    g_aim_pin = apin;
 }
 
-// The recoil cap. The pose of a clip is sampled by sub_00097E00 (VA 0x97E00); the keyframe fetch it calls, sub_00098450
-// (VA 0x98450), takes the time of the pose as its fourth argument (a float at esp+0x10, equal to the clip's t14 in the logs;
-// the fifth is the time of the last frame and changes nothing). While the sampler of the player's fire clip runs, a time above the
-// cap is swapped for the cap, so only the pose stops. The events (shells, sound) keep the real time.
+// The recoil cap (menu: NO WEAPON KICK). The pose of a clip is sampled by sub_00097E00 (VA 0x97E00); the keyframe fetch it
+// calls, sub_00098450 (VA 0x98450), takes the time of the pose as its fourth argument (a float at esp+0x10, equal to the
+// clip's t14). While the sampler of the player's fire clip runs, a time above the cap is swapped for the cap, so only the pose
+// stops. The events (shells, sound) keep the real time.
 static uint32_t g_kick_ac = 0;  // the player's animation controller, noted by sub_0017B130
 static bool g_fetch_active = false;
-static std::string g_fetch_tag;  // WEAPON_clipname of the fire clip being sampled, for the tree file
-// DIAGNOSIS: the node tree the pose is read from. 0x98450 hands the node to a handler by its type (low six bits of byte 0).
-// Type 2 is a sequence (count at byte 1, children from +0x10). Type 22 (0x9B000) is a leaf: its data block is at +0x10, the
-// block holds a list of events (count at +0x24, list at +0x28, 16 bytes each, a time first) and the keyframes. Every node is
-// written as raw words, each word that points within 1 MB of the node is followed (dbg9 measured from the clip: a miss).
-static bool OkPtr(uint32_t p, uint32_t len) { return p && !(p & 3) && p >= 0x80000000u && p + len < 0x84000000u; }
-static void TreeDump(const std::string& tag, uint32_t clip, uint32_t root) {
-    std::string path = std::string("/storage/emulated/0/Black/SaveData/tree_") + tag + ".log";
-    FILE* f = std::fopen(path.c_str(), "w");
-    if (!f) return;
-    std::fprintf(f, "clip %08X root %08X\nclip object:", clip, root);
-    for (int i = 0; i < 48; i++) std::fprintf(f, "%s%08X", (i % 8) ? " " : "\n  ", R32(clip + 4 * i));
-    std::fprintf(f, "\ntree:\n");
-    std::set<uint32_t> seen;
-    std::vector<std::pair<uint32_t, int>> todo;
-    todo.push_back({root, 0});
-    int nodes = 0;
-    while (!todo.empty() && nodes < 60) {
-        uint32_t a = todo.back().first;
-        int d = todo.back().second;
-        todo.pop_back();
-        if (!OkPtr(a, 64) || !seen.insert(a).second) continue;
-        nodes++;
-        uint32_t w[16];
-        for (int i = 0; i < 16; i++) w[i] = R32(a + 4 * i);
-        std::fprintf(f, "%*snode %08X d=%d type=%u b1=%d:", d * 2, "", a, d, w[0] & 0x3F, int(int8_t(w[0] >> 8)));
-        for (int i = 0; i < 16; i++) std::fprintf(f, " %08X", w[i]);
-        std::fprintf(f, "\n");
-        if ((w[0] & 0x3F) == 22) {   // a leaf: its data block (+0x10) and the block of +0x08
-            if (OkPtr(w[4], 256)) {
-                std::fprintf(f, "%*sdata block %08X (+0x10), 64 words:", d * 2, "", w[4]);
-                for (int i = 0; i < 64; i++) std::fprintf(f, "%s%08X", (i % 8) ? " " : "\n  ", R32(w[4] + 4 * i));
-                std::fprintf(f, "\n");
-                uint32_t cnt = R32(w[4] + 0x24), lst = R32(w[4] + 0x28);
-                if (cnt >= 1 && cnt <= 64 && OkPtr(lst, cnt * 16)) {
-                    std::fprintf(f, "%*sevent list %08X count %u (4 words each, time first):\n", d * 2, "", lst, cnt);
-                    for (uint32_t i = 0; i < cnt && i < 24; i++)
-                        std::fprintf(f, "%*s  %08X %08X %08X %08X  t=%.3f\n", d * 2, "", R32(lst + 16 * i), R32(lst + 16 * i + 4),
-                                     R32(lst + 16 * i + 8), R32(lst + 16 * i + 12), G<float>(lst + 16 * i));
-                }
-            }
-            if (OkPtr(w[2], 128)) {
-                std::fprintf(f, "%*sblock %08X (+0x08), 32 words:", d * 2, "", w[2]);
-                for (int i = 0; i < 32; i++) std::fprintf(f, "%s%08X", (i % 8) ? " " : "\n  ", R32(w[2] + 4 * i));
-                std::fprintf(f, "\n");
-            }
-        }
-        if (d >= 8) continue;
-        for (int i = 15; i >= 1; i--) {
-            uint32_t c = w[i];
-            int64_t gap = int64_t(c) - int64_t(a);
-            if (c && !(c & 3) && c != a && gap > -0x100000 && gap < 0x100000) todo.push_back({c, d + 1});
-        }
-    }
-    std::fprintf(f, "nodes written: %d\n", nodes);
-    std::fclose(f);
-}
 static uint32_t g_fetch_clip = 0;
 static float g_fetch_real = 0, g_fetch_cap = 0;
-// BONE HOLD (EXPERIMENT, dbg12). The functions below are the ones sub_0009BEB0 (the pose of a type 0 leaf) calls, plus the
-// 0x9C2C0 / 0x9C0C0 pair of the other path. While the sampler of the player's fire clip runs, every call is counted per function
-// (n = 0, 1, 2 ... within one sample) and the first ones are written to ads_test.log ("c9" lines: ecx, the six stack words and the
-// first words of what they point at). The sample line ("c9 sample") lists how many times each function was called in one pose.
-// bone_hold.txt in SaveData (read again every 0.5 s), one rule per line:
-//   KEY FUNC ARG CAP IDX   KEY = weapon key or ALL, FUNC = function address in hex (9BEB0 9C2C0 9C0C0 9B160 9B280 9BAB0 93B00
-//                          92570 9BBC0 9BD20 9BC40 9BE70), ARG = stack argument 1..7 holding the time as a float (0 = off),
-//                          CAP = that float is replaced by CAP while it is above it, IDX = call numbers n, "0,3" or "*" for all.
-// The old four column lines (no FUNC) still read, they mean FUNC = 9C0C0.
-// dbg14: FUNC 98450 (the keyframe fetch of the sampler, only the calls for the player's fire clip) is watched too. Its time is
-// stack argument 4. IDX may also be @ADDR[,ADDR] (hex): the calls made from those return addresses (93906 96C80 96E42 96EEA).
-// PIN (dbg13): ARG = -1 (FUNC 9BBC0 only) or -2 (FUNC 9BBC0 or 92570). The call is NOT skipped; it runs, and afterwards the 32 bytes
-// it wrote at its first stack argument (the output transform) are put back to the copy taken at the first call whose clip time
-// is >= CAP (CAP 0 = the first sample of the burst). So that one bone stays at that pose while everything else keeps playing.
-// IDX = for -1 the decimal values of the third stack argument of 9BBC0, for -2 the call numbers n. "*" = all.
-static const uint32_t kBhAddr[] = {0x9BEB0, 0x9C2C0, 0x9C0C0, 0x9B160, 0x9B280, 0x9BAB0, 0x93B00, 0x92570, 0x9BBC0, 0x9BD20, 0x9BC40, 0x9BE70, 0x98450};
-static const int kBhN = 13;
-static int g_bh_calls[kBhN];
-struct BoneRule { std::string key; uint32_t func = 0; int arg = 0; float cap = 0; bool all = false; std::set<int> idx; std::set<uint32_t> ret;
-                  int type = -1; std::set<uint32_t> ptr; };   // dbg15: type >= 0 = a node type rule (FUNC written T22), ptr = node addresses (IDX #ADDR)
-static std::vector<BoneRule> g_bone_rules;
-static std::chrono::steady_clock::time_point g_bone_checked;
-static void LoadBoneHold() {
-    auto now = std::chrono::steady_clock::now();
-    if (now - g_bone_checked < std::chrono::milliseconds(500)) return;
-    g_bone_checked = now;
-    const char* path = "/storage/emulated/0/Black/SaveData/bone_hold.txt";
-    std::ifstream f(path);
-    if (!f) {
-        if (FILE* w = std::fopen(path, "w")) {
-            std::fputs("# KEY FUNC ARG CAP IDX. KEY = weapon key (PST SHG SMG ASR AK1 GRL SM3 P90 HVY MGN M16 RM1 GK1 MP1 BNS) or ALL.\n"
-                       "# FUNC = hex address: 9BEB0 9C2C0 9C0C0 9B160 9B280 9BAB0 93B00 92570 9BBC0 9BD20 9BC40 9BE70\n"
-                       "# ARG = stack argument 1..7 of FUNC that holds the time as a float, 0 = off. CAP = the time is held at this value\n"
-                       "# once it is above. IDX = which calls of one sample (0,1,2...) or * for all. See the c9 lines of ads_test.log.\n"
-                       "# 98450: time is ARG 4. IDX = call numbers or @96C80,96E42 (return addresses of the callers: 93906 96C80 96E42 96EEA).\n"
-                       "# PIN: ARG -1 (FUNC 9BBC0, IDX = decimal ids) or -2 (FUNC 9BBC0 or 92570, IDX = call numbers): CAP = t14 where the transform is captured and then held.\n"
-                       "# dbg15: FUNC = T0..T25 holds the time of a NODE TYPE (ARG 4 = current time, 5 = previous). IDX = call numbers of that type\n"
-                       "# in one sample, * for all, or #ADDR,ADDR = node addresses from the c12 lines. Example: HVY T22 4 4 *\n"
-                       "# dbg15b: FUNC = OUT: the pose output of the fire clip (32 bytes, 8 floats). ARG = float index 0..7, CAP = the value written there\n"
-                       "# (HVY OUT 7 1 *). FUNC = OUTK: CAP = a factor, new = 1 + (value - 1) * CAP (HVY OUTK 7 0.5 *). IDX is not used.\n"
-                       "# dbg16: FUNC = EVT: the events of the fire clip are not delivered (ARG and CAP unused, write 0 0). IDX = * (all), event times\n"
-                       "# (1,7,13), or #ADDR = the name pointer or the argument block pointer from the c16 lines (HVY EVT 0 0 #83D6F670)\n"
-                       "# dbg17: FUNC = CLP: the OTHER clips sampled while firing (c18 lines, id=N). CAP = the time they are sampled at (held, the game keeps its own\n"
-                       "# time). IDX = ids from the c18 lines (same game run only) or * for all of them (HVY CLP 0 4 3)\n"
-                       "ALL 9BEB0 0 0 *\n", w);
-            std::fclose(w);
-        }
-        return;
-    }
-    std::vector<BoneRule> m;
-    std::string line;
-    while (std::getline(f, line)) {
-        size_t at = line.find_first_not_of(" \t\r");
-        if (at == std::string::npos || line[at] == '#') continue;
-        std::istringstream in(line);
-        std::vector<std::string> t;
-        std::string w;
-        while (in >> w) t.push_back(w);
-        BoneRule r;
-        std::string ids;
-        if (t.size() >= 5) {
-            r.key = t[0];
-            if (t[1][0] == 'T' || t[1][0] == 't') { r.type = std::atoi(t[1].c_str() + 1); r.func = 0; }   // dbg15: T0..T25 = node type
-            else if (t[1] == "EVT" || t[1] == "evt") { r.type = -4; r.func = 0; }   // dbg16: mute events, see sub_00097F80
-            else if (t[1] == "CLP" || t[1] == "clp") { r.type = -5; r.func = 0; }   // dbg17: hold the time of other clips, see OtherClipEnter
-            else if (t[1].size() >= 3 && (t[1].compare(0, 3, "OUT") == 0 || t[1].compare(0, 3, "out") == 0)) {   // dbg15b: OUT / OUTK, see ApplyOut
-                r.type = (t[1].size() > 3 && (t[1][3] == 'K' || t[1][3] == 'k')) ? -3 : -2;
-                r.func = 0;
-            }
-            else r.func = uint32_t(std::strtoul(t[1].c_str(), nullptr, 16));
-            r.arg = std::atoi(t[2].c_str());
-            r.cap = float(std::atof(t[3].c_str()));
-            ids = t[4];
-        } else if (t.size() == 4) {
-            r.key = t[0];
-            r.func = 0x9C0C0;
-            r.arg = std::atoi(t[1].c_str());
-            r.cap = float(std::atof(t[2].c_str()));
-            ids = t[3];
-        } else continue;
-        if (ids == "*") r.all = true;
-        else if (!ids.empty() && ids[0] == '#') {   // dbg15: #ADDR[,ADDR] = node addresses (hex) from the c12 lines
-            std::istringstream is(ids.substr(1));
-            std::string x;
-            while (std::getline(is, x, ',')) if (!x.empty()) r.ptr.insert(uint32_t(std::strtoul(x.c_str(), nullptr, 16)));
-        } else if (!ids.empty() && ids[0] == '@') {   // @96C80,96E42 = the calls whose return address is one of these (hex)
-            std::istringstream is(ids.substr(1));
-            std::string x;
-            while (std::getline(is, x, ',')) if (!x.empty()) r.ret.insert(uint32_t(std::strtoul(x.c_str(), nullptr, 16)));
-        } else {
-            std::istringstream is(ids);
-            std::string x;
-            while (std::getline(is, x, ',')) if (!x.empty()) r.idx.insert(std::atoi(x.c_str()));
-        }
-        m.push_back(r);
-    }
-    g_bone_rules.swap(m);
-}
-// ---- dbg13: PIN of one output transform (see the comment above) and the c10 log ----
-struct PinSnap { uint32_t w[8]; bool have = false; };
-static std::map<std::string, PinSnap> g_pin_snap;
-static int g_c10_lines = 0;
-static std::map<std::string, int> g_c10_shown;
-static std::map<uint32_t, int> g_h_callers;   // dbg14: calls of sub_00098450 per return address in this sample
-static std::string g_fetch_weapon;
-static int g_c9_sample = 0, g_c9_lines = 0;
-static std::map<std::string, int> g_c9_detail;
-static bool PtrOk2(uint32_t p) {
-    return !(p & 3) && ((p >= 0x80000000u && p + 16 < 0x84000000u) || (p >= 0x10000u && p < 0x300000u));
-}
-// Called at the entry of every watched function. Returns true when a stack argument was replaced (BhLeave puts it back).
-static bool BhEnter(int fid, uint32_t esp0, uint32_t ecx, int& slot, float& saved) {
-    slot = 0;
-    saved = 0;
-    if (!g_fetch_active) return false;
-    int n = g_bh_calls[fid]++;
-    {
-        char key[96];
-        std::snprintf(key, sizeof key, "%s#%05X", g_fetch_tag.c_str(), unsigned(kBhAddr[fid]));
-        int& shown = g_c9_detail[key];
-        if (shown < 6 && g_c9_lines < 900) {
-            shown++;
-            g_c9_lines++;
-            std::string s;
-            char b[96];
-            for (int i = 1; i <= 6; i++) {
-                uint32_t a = R32(esp0 + 4 * i);
-                std::snprintf(b, sizeof b, " a%d=%08X(%.3f)", i, a, double(G<float>(esp0 + 4 * i)));
-                s += b;
-            }
-            DbgLog("c9 %s f=%05X s=%d n=%d ret=%08X ecx=%08X%s\n", g_fetch_tag.c_str(), unsigned(kBhAddr[fid]), g_c9_sample, n, unsigned(R32(esp0)), unsigned(ecx), s.c_str());
-            for (int i = 0; i <= 6; i++) {
-                uint32_t a = i ? R32(esp0 + 4 * i) : ecx;
-                if (!PtrOk2(a) || a < 0x100000u) continue;
-                DbgLog("c9   %s->%08X: %08X %08X %08X %08X\n", i ? ("a" + std::to_string(i)).c_str() : "ecx", a, R32(a), R32(a + 4),
-                       R32(a + 8), R32(a + 12));
-            }
-        }
-    }
-    LoadBoneHold();
-    const BoneRule* use = nullptr;
-    for (int pass = 0; pass < 2 && !use; pass++)
-        for (const BoneRule& r : g_bone_rules)
-            if (r.func == kBhAddr[fid] && r.key == (pass == 0 ? g_fetch_weapon : std::string("ALL")) && r.arg >= 1 && r.arg <= 7 &&
-                r.cap > 0 && (r.all || r.idx.count(n) || r.ret.count(R32(esp0)))) {
-                use = &r;
-                break;
-            }
-    if (!use) return false;
-    float v = G<float>(esp0 + 4 * use->arg);
-    if (!std::isfinite(v) || !(v > use->cap) || !(v < 100000.0f)) return false;
-    slot = use->arg;
-    saved = v;
-    G<float>(esp0 + 4 * slot) = use->cap;
-    return true;
-}
-static void BhLeave(uint32_t esp0, bool swap, int slot, float saved) {
-    if (swap) G<float>(esp0 + 4 * slot) = saved;
-}
-// Called after sub_0009BBC0 (fid 8) and sub_00092570 (fid 7) returned. dest = their first stack argument, id = third stack argument
-// (9BBC0: an integer), ret_addr = who called, eax = their return value (both return dest when they did their job).
-static void BhAfter(int fid, uint32_t ret_addr, uint32_t eax, int n, uint32_t dest, uint32_t id) {
-    if (!g_fetch_active) return;
-    bool ok = dest >= 0x10000u && !(dest & 3) && eax == dest;
-    if (g_c10_lines < 900) {
-        char key[96];
-        std::snprintf(key, sizeof key, "%s#%d", g_fetch_tag.c_str(), fid);
-        int& shown = g_c10_shown[key];
-        if (shown < 72) {
-            shown++;
-            g_c10_lines++;
-            std::string o;
-            char b[40];
-            if (ok)
-                for (int i = 0; i < 8; i++) {
-                    std::snprintf(b, sizeof b, " %.4f", double(G<float>(dest + 4 * i)));
-                    o += b;
-                }
-            DbgLog("c10 %s f=%05X s=%d t14=%.2f n=%d id=%u ret=%08X dest=%08X eax=%08X ok=%d out:%s\n", g_fetch_tag.c_str(),
-                   unsigned(kBhAddr[fid]), g_c9_sample, double(g_fetch_real), n, unsigned(id), unsigned(ret_addr), unsigned(dest),
-                   unsigned(eax), ok ? 1 : 0, o.c_str());
-        }
-    }
-    if (ok) {   // dbg15: one line per clip time bucket of 10, to see the output beyond t14 12 (c10w)
-        static std::set<std::string> seenw;
-        static int linesw = 0;
-        char kw[128];
-        std::snprintf(kw, sizeof kw, "%s#%d#%d", g_fetch_tag.c_str(), fid, int(g_fetch_real) / 10);
-        if (linesw < 700 && seenw.insert(kw).second) {
-            linesw++;
-            std::string o;
-            char b[40];
-            for (int i = 0; i < 8; i++) { std::snprintf(b, sizeof b, " %.4f", double(G<float>(dest + 4 * i))); o += b; }
-            DbgLog("c10w %s f=%05X t14=%.2f n=%d id=%u out:%s\n", g_fetch_tag.c_str(), unsigned(kBhAddr[fid]), double(g_fetch_real), n, unsigned(id), o.c_str());
-        }
-    }
-    if (!ok) return;
-    {   // the pin assumes 32 bytes: a 16 byte vector, then a 16 byte unit quaternion. If the last four words are not one, leave it alone
-        float q = 0;
-        for (int i = 4; i < 8; i++) {
-            float f = G<float>(dest + 4 * i);
-            q += f * f;
-        }
-        if (!(q > 0.9f && q < 1.1f)) return;
-    }
-    const BoneRule* use = nullptr;
-    for (int pass = 0; pass < 2 && !use; pass++)
-        for (const BoneRule& r : g_bone_rules) {
-            if (r.func != kBhAddr[fid] || r.key != (pass == 0 ? g_fetch_weapon : std::string("ALL"))) continue;
-            bool hit = (r.arg == -1 && fid == 8 && (r.all || r.idx.count(int(id)))) || (r.arg == -2 && (r.all || r.idx.count(n)));
-            if (hit) {
-                use = &r;
-                break;
-            }
-        }
-    if (!use) return;
-    char k[128];
-    std::snprintf(k, sizeof k, "%s#%d#%s%d", g_fetch_tag.c_str(), fid, use->arg == -1 ? "i" : "n", use->arg == -1 ? int(id) : n);
-    PinSnap& sn = g_pin_snap[k];
-    if (!sn.have) {
-        if (g_fetch_real >= use->cap) {
-            for (int i = 0; i < 8; i++) sn.w[i] = R32(dest + 4 * i);
-            sn.have = true;
-        }
-        return;
-    }
-    for (int i = 0; i < 8; i++) W32(dest + 4 * i, sn.w[i]);
-}
-X86_EXTERN_FUNC(__imp__sub_0009BEB0);
-X86_FUNC(sub_0009BEB0) {
-    uint32_t esp0 = ctx.esp;
-    int slot;
-    float saved;
-    bool sw = BhEnter(0, esp0, ctx.ecx, slot, saved);
-    __imp__sub_0009BEB0(ctx, base);
-    BhLeave(esp0, sw, slot, saved);
-}
-X86_EXTERN_FUNC(__imp__sub_0009C2C0);
-X86_FUNC(sub_0009C2C0) {
-    uint32_t esp0 = ctx.esp;
-    int slot;
-    float saved;
-    bool sw = BhEnter(1, esp0, ctx.ecx, slot, saved);
-    __imp__sub_0009C2C0(ctx, base);
-    BhLeave(esp0, sw, slot, saved);
-}
-X86_EXTERN_FUNC(__imp__sub_0009C0C0);
-X86_FUNC(sub_0009C0C0) {
-    uint32_t esp0 = ctx.esp;
-    int slot;
-    float saved;
-    bool sw = BhEnter(2, esp0, ctx.ecx, slot, saved);
-    __imp__sub_0009C0C0(ctx, base);
-    BhLeave(esp0, sw, slot, saved);
-}
-X86_EXTERN_FUNC(__imp__sub_0009B160);
-X86_FUNC(sub_0009B160) {
-    uint32_t esp0 = ctx.esp;
-    int slot;
-    float saved;
-    bool sw = BhEnter(3, esp0, ctx.ecx, slot, saved);
-    __imp__sub_0009B160(ctx, base);
-    BhLeave(esp0, sw, slot, saved);
-}
-X86_EXTERN_FUNC(__imp__sub_0009B280);
-X86_FUNC(sub_0009B280) {
-    uint32_t esp0 = ctx.esp;
-    int slot;
-    float saved;
-    bool sw = BhEnter(4, esp0, ctx.ecx, slot, saved);
-    __imp__sub_0009B280(ctx, base);
-    BhLeave(esp0, sw, slot, saved);
-}
-X86_EXTERN_FUNC(__imp__sub_0009BAB0);
-X86_FUNC(sub_0009BAB0) {
-    uint32_t esp0 = ctx.esp;
-    int slot;
-    float saved;
-    bool sw = BhEnter(5, esp0, ctx.ecx, slot, saved);
-    __imp__sub_0009BAB0(ctx, base);
-    BhLeave(esp0, sw, slot, saved);
-}
-X86_EXTERN_FUNC(__imp__sub_00093B00);
-X86_FUNC(sub_00093B00) {
-    uint32_t esp0 = ctx.esp;
-    int slot;
-    float saved;
-    bool sw = BhEnter(6, esp0, ctx.ecx, slot, saved);
-    __imp__sub_00093B00(ctx, base);
-    BhLeave(esp0, sw, slot, saved);
-}
-X86_EXTERN_FUNC(__imp__sub_00092570);
-X86_FUNC(sub_00092570) {
-    uint32_t esp0 = ctx.esp;
-    int n = g_bh_calls[7];
-    uint32_t ret = R32(esp0), dest = R32(esp0 + 4);
-    int slot;
-    float saved;
-    bool sw = BhEnter(7, esp0, ctx.ecx, slot, saved);
-    __imp__sub_00092570(ctx, base);
-    BhLeave(esp0, sw, slot, saved);
-    BhAfter(7, ret, ctx.eax, n, dest, 0);
-}
-X86_EXTERN_FUNC(__imp__sub_0009BBC0);
-X86_FUNC(sub_0009BBC0) {
-    uint32_t esp0 = ctx.esp;
-    int n = g_bh_calls[8];
-    uint32_t ret = R32(esp0), dest = R32(esp0 + 4), id = R32(esp0 + 12);
-    int slot;
-    float saved;
-    bool sw = BhEnter(8, esp0, ctx.ecx, slot, saved);
-    __imp__sub_0009BBC0(ctx, base);
-    BhLeave(esp0, sw, slot, saved);
-    BhAfter(8, ret, ctx.eax, n, dest, id);
-}
-X86_EXTERN_FUNC(__imp__sub_0009BD20);
-X86_FUNC(sub_0009BD20) {
-    uint32_t esp0 = ctx.esp;
-    int slot;
-    float saved;
-    bool sw = BhEnter(9, esp0, ctx.ecx, slot, saved);
-    __imp__sub_0009BD20(ctx, base);
-    BhLeave(esp0, sw, slot, saved);
-}
-X86_EXTERN_FUNC(__imp__sub_0009BC40);
-X86_FUNC(sub_0009BC40) {
-    uint32_t esp0 = ctx.esp;
-    int slot;
-    float saved;
-    bool sw = BhEnter(10, esp0, ctx.ecx, slot, saved);
-    __imp__sub_0009BC40(ctx, base);
-    BhLeave(esp0, sw, slot, saved);
-}
-X86_EXTERN_FUNC(__imp__sub_0009BE70);
-X86_FUNC(sub_0009BE70) {
-    uint32_t esp0 = ctx.esp;
-    int slot;
-    float saved;
-    bool sw = BhEnter(11, esp0, ctx.ecx, slot, saved);
-    __imp__sub_0009BE70(ctx, base);
-    BhLeave(esp0, sw, slot, saved);
-}
-
-// ---- dbg15 (PLAN D): every node handler of the jump table at VA 0x29B1D8 is wrapped. 98450 only dispatches (it jumps to the
-// handler of the node's type), and the composite types call their children through the same table, so only the handlers see
-// every node of the tree. Types 0-25, type 12 (a shared stub at 0x2B700) is left alone. If the build says a symbol sub_000XXXXX
-// is undefined, set that type's ND_Tn below to 0 and tell which one.
-#ifndef ND_T0
-#define ND_T0 1
-#endif
-#ifndef ND_T1
-#define ND_T1 1
-#endif
-#ifndef ND_T2
-#define ND_T2 1
-#endif
-#ifndef ND_T3
-#define ND_T3 1
-#endif
-#ifndef ND_T4
-#define ND_T4 1
-#endif
-#ifndef ND_T5
-#define ND_T5 1
-#endif
-#ifndef ND_T6
-#define ND_T6 1
-#endif
-#ifndef ND_T7
-#define ND_T7 1
-#endif
-#ifndef ND_T8
-#define ND_T8 1
-#endif
-#ifndef ND_T9
-#define ND_T9 1
-#endif
-#ifndef ND_T10
-#define ND_T10 1
-#endif
-#ifndef ND_T11
-#define ND_T11 1
-#endif
-#ifndef ND_T13
-#define ND_T13 1
-#endif
-#ifndef ND_T14
-#define ND_T14 1
-#endif
-#ifndef ND_T15
-#define ND_T15 1
-#endif
-#ifndef ND_T16
-#define ND_T16 1
-#endif
-#ifndef ND_T17
-#define ND_T17 1
-#endif
-#ifndef ND_T18
-#define ND_T18 1
-#endif
-#ifndef ND_T19
-#define ND_T19 1
-#endif
-#ifndef ND_T20
-#define ND_T20 1
-#endif
-#ifndef ND_T21
-#define ND_T21 1
-#endif
-#ifndef ND_T22
-#define ND_T22 1
-#endif
-#ifndef ND_T23
-#define ND_T23 1
-#endif
-#ifndef ND_T24
-#define ND_T24 1
-#endif
-#ifndef ND_T25
-#define ND_T25 1
-#endif
-static int g_nd_calls[26];            // calls per type in this sample (clip = the fire clip only)
-static int g_nd_seq = 0, g_nd_depth = 0, g_nd_lines = 0;
-static bool g_nd_log = false;         // this sample is written to the log (first 3 of a weapon and clip, then every 30th)
-static std::map<std::string, int> g_nd_k;
-struct NodeHold { bool act = false, held = false; int slot = 0; float saved = 0; };
-// Handler args (stack, cdecl): 1 clip, 2 node, 3 pointer, 4 time (float), 5 previous time (float), 6 flags.
-static NodeHold NodeEnter(int type, uint32_t esp0) {
-    NodeHold h;
-    if (!g_fetch_active || R32(esp0 + 4) != g_fetch_clip || type < 0 || type > 25) return h;
-    h.act = true;
-    int n = g_nd_calls[type]++;
-    int q = g_nd_seq++;
-    uint32_t node = R32(esp0 + 8);
-    if (g_nd_log && g_nd_lines < 1500) {
-        g_nd_lines++;
-        uint32_t w[5] = {0, 0, 0, 0, 0};
-        if (PtrOk2(node)) for (int i = 0; i < 5; i++) w[i] = R32(node + 4 * i);
-        DbgLog("c12 %s s=%d q=%d d=%d T=%d n=%d node=%08X ret=%08X t=%.3f p=%.3f a3=%08X a6=%08X w: %08X %08X %08X %08X %08X\n",
-               g_fetch_tag.c_str(), g_c9_sample, q, g_nd_depth, type, n, unsigned(node), unsigned(R32(esp0)), double(G<float>(esp0 + 0x10)),
-               double(G<float>(esp0 + 0x14)), unsigned(R32(esp0 + 12)), unsigned(R32(esp0 + 0x18)), unsigned(w[0]), unsigned(w[1]), unsigned(w[2]),
-               unsigned(w[3]), unsigned(w[4]));
-    }
-    LoadBoneHold();
-    const BoneRule* use = nullptr;
-    for (int pass = 0; pass < 2 && !use; pass++)
-        for (const BoneRule& r : g_bone_rules)
-            if (r.type == type && r.key == (pass == 0 ? g_fetch_weapon : std::string("ALL")) && (r.arg == 4 || r.arg == 5) && r.cap > 0 &&
-                (r.all || r.idx.count(n) || r.ptr.count(node))) {
-                use = &r;
-                break;
-            }
-    if (use) {
-        float v = G<float>(esp0 + 4 * use->arg);
-        if (std::isfinite(v) && v > use->cap && v < 100000.0f) {   // the value is held, not skipped; put back on leaving
-            h.held = true;
-            h.slot = use->arg;
-            h.saved = v;
-            G<float>(esp0 + 4 * h.slot) = use->cap;
-        }
-    }
-    g_nd_depth++;
-    return h;
-}
-static void NodeLeave(const NodeHold& h, uint32_t esp0) {
-    if (!h.act) return;
-    g_nd_depth--;
-    if (h.held) G<float>(esp0 + 4 * h.slot) = h.saved;
-}
-#if ND_T0
-X86_EXTERN_FUNC(__imp__sub_00098970);
-X86_FUNC(sub_00098970) {
-    uint32_t e = ctx.esp;
-    NodeHold h = NodeEnter(0, e);
-    __imp__sub_00098970(ctx, base);
-    NodeLeave(h, e);
-}
-#endif
-#if ND_T1
-X86_EXTERN_FUNC(__imp__sub_00098A60);
-X86_FUNC(sub_00098A60) {
-    uint32_t e = ctx.esp;
-    NodeHold h = NodeEnter(1, e);
-    __imp__sub_00098A60(ctx, base);
-    NodeLeave(h, e);
-}
-#endif
-#if ND_T2
-X86_EXTERN_FUNC(__imp__sub_00098CB0);
-X86_FUNC(sub_00098CB0) {
-    uint32_t e = ctx.esp;
-    NodeHold h = NodeEnter(2, e);
-    __imp__sub_00098CB0(ctx, base);
-    NodeLeave(h, e);
-}
-#endif
-#if ND_T3
-X86_EXTERN_FUNC(__imp__sub_000990E0);
-X86_FUNC(sub_000990E0) {
-    uint32_t e = ctx.esp;
-    NodeHold h = NodeEnter(3, e);
-    __imp__sub_000990E0(ctx, base);
-    NodeLeave(h, e);
-}
-#endif
-#if ND_T4
-X86_EXTERN_FUNC(__imp__sub_00099130);
-X86_FUNC(sub_00099130) {
-    uint32_t e = ctx.esp;
-    NodeHold h = NodeEnter(4, e);
-    __imp__sub_00099130(ctx, base);
-    NodeLeave(h, e);
-}
-#endif
-#if ND_T5
-X86_EXTERN_FUNC(__imp__sub_000999B0);
-X86_FUNC(sub_000999B0) {
-    uint32_t e = ctx.esp;
-    NodeHold h = NodeEnter(5, e);
-    __imp__sub_000999B0(ctx, base);
-    NodeLeave(h, e);
-}
-#endif
-#if ND_T6
-X86_EXTERN_FUNC(__imp__sub_00099A80);
-X86_FUNC(sub_00099A80) {
-    uint32_t e = ctx.esp;
-    NodeHold h = NodeEnter(6, e);
-    __imp__sub_00099A80(ctx, base);
-    NodeLeave(h, e);
-}
-#endif
-#if ND_T7
-X86_EXTERN_FUNC(__imp__sub_00099A30);
-X86_FUNC(sub_00099A30) {
-    uint32_t e = ctx.esp;
-    NodeHold h = NodeEnter(7, e);
-    __imp__sub_00099A30(ctx, base);
-    NodeLeave(h, e);
-}
-#endif
-#if ND_T8
-X86_EXTERN_FUNC(__imp__sub_000983D0);
-X86_FUNC(sub_000983D0) {
-    uint32_t e = ctx.esp;
-    NodeHold h = NodeEnter(8, e);
-    __imp__sub_000983D0(ctx, base);
-    NodeLeave(h, e);
-}
-#endif
-#if ND_T9
-X86_EXTERN_FUNC(__imp__sub_00099AD0);
-X86_FUNC(sub_00099AD0) {
-    uint32_t e = ctx.esp;
-    NodeHold h = NodeEnter(9, e);
-    __imp__sub_00099AD0(ctx, base);
-    NodeLeave(h, e);
-}
-#endif
-#if ND_T10
-X86_EXTERN_FUNC(__imp__sub_00099B20);
-X86_FUNC(sub_00099B20) {
-    uint32_t e = ctx.esp;
-    NodeHold h = NodeEnter(10, e);
-    __imp__sub_00099B20(ctx, base);
-    NodeLeave(h, e);
-}
-#endif
-#if ND_T11
-X86_EXTERN_FUNC(__imp__sub_00099BB0);
-X86_FUNC(sub_00099BB0) {
-    uint32_t e = ctx.esp;
-    NodeHold h = NodeEnter(11, e);
-    __imp__sub_00099BB0(ctx, base);
-    NodeLeave(h, e);
-}
-#endif
-#if ND_T13
-X86_EXTERN_FUNC(__imp__sub_00099C60);
-X86_FUNC(sub_00099C60) {
-    uint32_t e = ctx.esp;
-    NodeHold h = NodeEnter(13, e);
-    __imp__sub_00099C60(ctx, base);
-    NodeLeave(h, e);
-}
-#endif
-#if ND_T14
-X86_EXTERN_FUNC(__imp__sub_00099F10);
-X86_FUNC(sub_00099F10) {
-    uint32_t e = ctx.esp;
-    NodeHold h = NodeEnter(14, e);
-    __imp__sub_00099F10(ctx, base);
-    NodeLeave(h, e);
-}
-#endif
-#if ND_T15
-X86_EXTERN_FUNC(__imp__sub_0009A1C0);
-X86_FUNC(sub_0009A1C0) {
-    uint32_t e = ctx.esp;
-    NodeHold h = NodeEnter(15, e);
-    __imp__sub_0009A1C0(ctx, base);
-    NodeLeave(h, e);
-}
-#endif
-#if ND_T16
-X86_EXTERN_FUNC(__imp__sub_0009A230);
-X86_FUNC(sub_0009A230) {
-    uint32_t e = ctx.esp;
-    NodeHold h = NodeEnter(16, e);
-    __imp__sub_0009A230(ctx, base);
-    NodeLeave(h, e);
-}
-#endif
-#if ND_T17
-X86_EXTERN_FUNC(__imp__sub_0009A3F0);
-X86_FUNC(sub_0009A3F0) {
-    uint32_t e = ctx.esp;
-    NodeHold h = NodeEnter(17, e);
-    __imp__sub_0009A3F0(ctx, base);
-    NodeLeave(h, e);
-}
-#endif
-#if ND_T18
-X86_EXTERN_FUNC(__imp__sub_0009A2E0);
-X86_FUNC(sub_0009A2E0) {
-    uint32_t e = ctx.esp;
-    NodeHold h = NodeEnter(18, e);
-    __imp__sub_0009A2E0(ctx, base);
-    NodeLeave(h, e);
-}
-#endif
-#if ND_T19
-X86_EXTERN_FUNC(__imp__sub_0009A660);
-X86_FUNC(sub_0009A660) {
-    uint32_t e = ctx.esp;
-    NodeHold h = NodeEnter(19, e);
-    __imp__sub_0009A660(ctx, base);
-    NodeLeave(h, e);
-}
-#endif
-#if ND_T20
-X86_EXTERN_FUNC(__imp__sub_00098400);
-X86_FUNC(sub_00098400) {
-    uint32_t e = ctx.esp;
-    NodeHold h = NodeEnter(20, e);
-    __imp__sub_00098400(ctx, base);
-    NodeLeave(h, e);
-}
-#endif
-#if ND_T21
-X86_EXTERN_FUNC(__imp__sub_0009A920);
-X86_FUNC(sub_0009A920) {
-    uint32_t e = ctx.esp;
-    NodeHold h = NodeEnter(21, e);
-    __imp__sub_0009A920(ctx, base);
-    NodeLeave(h, e);
-}
-#endif
-#if ND_T22
-X86_EXTERN_FUNC(__imp__sub_0009B000);
-X86_FUNC(sub_0009B000) {
-    uint32_t e = ctx.esp;
-    NodeHold h = NodeEnter(22, e);
-    __imp__sub_0009B000(ctx, base);
-    NodeLeave(h, e);
-}
-#endif
-#if ND_T23
-X86_EXTERN_FUNC(__imp__sub_0009A860);
-X86_FUNC(sub_0009A860) {
-    uint32_t e = ctx.esp;
-    NodeHold h = NodeEnter(23, e);
-    __imp__sub_0009A860(ctx, base);
-    NodeLeave(h, e);
-}
-#endif
-#if ND_T24
-X86_EXTERN_FUNC(__imp__sub_00098430);
-X86_FUNC(sub_00098430) {
-    uint32_t e = ctx.esp;
-    NodeHold h = NodeEnter(24, e);
-    __imp__sub_00098430(ctx, base);
-    NodeLeave(h, e);
-}
-#endif
-#if ND_T25
-X86_EXTERN_FUNC(__imp__sub_0009A9A0);
-X86_FUNC(sub_0009A9A0) {
-    uint32_t e = ctx.esp;
-    NodeHold h = NodeEnter(25, e);
-    __imp__sub_0009A9A0(ctx, base);
-    NodeLeave(h, e);
-}
-#endif
-// dbg15: where the pose is written. 9BEB0 copies a 32 byte transform into the slot 9BC40 gave (91C20, from 9C03D) or builds it
-// with 92290 (from 9C099). The slot is logged once per t14 bucket of 10 (c14).
-static void PoseSlotLog(int which, uint32_t dst) {
-    if (!g_fetch_active || !PtrOk2(dst)) return;
-    static std::set<std::string> seen;
-    static int lines = 0;
-    char k[128];
-    std::snprintf(k, sizeof k, "%s#%d#%d", g_fetch_tag.c_str(), which, int(g_fetch_real) / 10);
-    if (lines >= 700 || !seen.insert(k).second) return;
-    lines++;
-    std::string o;
-    char b[40];
-    for (int i = 0; i < 8; i++) { std::snprintf(b, sizeof b, " %.4f", double(G<float>(dst + 4 * i))); o += b; }
-    DbgLog("c14 %s w=%d s=%d t14=%.2f dst=%08X out:%s\n", g_fetch_tag.c_str(), which, g_c9_sample, double(g_fetch_real), unsigned(dst), o.c_str());
-}
-// dbg15b: the pose of the fire clip is ONE transform (key id 80): only its last float (index 7) moves, 1.0 -> 1.029 -> 1.0.
-// Written back after the game made it (nothing is skipped; the slot is read by 9BE70 afterwards). The belt, bolt and shells
-// are events of the same leaf and are not touched.
-static void ApplyOut(uint32_t dst) {
-    if (!g_fetch_active || !PtrOk2(dst)) return;
-    LoadBoneHold();
-    bool done = false;
-    for (int pass = 0; pass < 2 && !done; pass++)
-        for (const BoneRule& r : g_bone_rules) {
-            if ((r.type != -2 && r.type != -3) || r.arg < 0 || r.arg > 7 || r.key != (pass == 0 ? g_fetch_weapon : std::string("ALL"))) continue;
-            float& v = G<float>(dst + 4 * r.arg);
-            float before = v;
-            if (!std::isfinite(before)) continue;
-            v = r.type == -2 ? r.cap : 1.0f + (before - 1.0f) * r.cap;
-            done = true;
-            static std::map<std::string, int> shown;
-            int& sh = shown[g_fetch_tag];
-            if (sh < 6) {
-                sh++;
-                DbgLog("c15 %s t14=%.2f dst=%08X w%d %.4f -> %.4f\n", g_fetch_tag.c_str(), double(g_fetch_real), unsigned(dst), r.arg, double(before), double(v));
-            }
-        }
-}
-// dbg16: EVENTS. 9B420 walks the event list of a leaf (16 bytes each: time, name pointer, 3 flag bytes, argument block) and, when
-// the time window covers an event, calls 97F80(state, event). That only runs the game callback kept at 0x2CE700. It is logged
-// here (c16: time, the name text, the argument block and the text it points at). EVT rules mute an event the safe way: the word at
-// state+0x84, which 97F80 tests first, is held at 0 during the call and put back after it. Nothing is skipped.
-static bool StrOk(uint32_t p) { return (p >= 0x80000000u && p + 64 < 0x84000000u) || (p >= 0x10000u && p < 0x2FFF00u); }
-static std::string StrAt(uint32_t p) {
-    std::string o;
-    if (!StrOk(p)) return o;
-    for (int i = 0; i < 40; i++) {
-        uint8_t c = G<uint8_t>(p + i);
-        if (!c) break;
-        o += (c >= 32 && c < 127) ? char(c) : '?';
-    }
-    return o;
-}
-X86_EXTERN_FUNC(__imp__sub_00097F80);
-X86_FUNC(sub_00097F80) {
-    uint32_t e = ctx.esp;
-    uint32_t state = R32(e + 4), evt = R32(e + 8);
-    bool mute = false;
-    uint32_t saved = 0;
-    if (g_fetch_active && PtrOk2(state) && PtrOk2(evt)) {
-        float tm = G<float>(evt);
-        uint32_t w1 = R32(evt + 4), w2 = R32(evt + 8), w3 = R32(evt + 12);
-        static uint32_t cb_shown = 1;
-        static std::set<std::string> seen;
-        static int lines = 0, mlines = 0;
-        uint32_t cb = R32(0x2CE700);
-        if (cb != cb_shown) {
-            cb_shown = cb;
-            DbgLog("c16 event callback (2CE700) = %08X\n", unsigned(cb));
-        }
-        LoadBoneHold();
-        for (int pass = 0; pass < 2 && !mute; pass++)
-            for (const BoneRule& r : g_bone_rules)
-                if (r.type == -4 && r.key == (pass == 0 ? g_fetch_weapon : std::string("ALL")) &&
-                    (r.all || r.idx.count(int(tm + 0.5f)) || r.ptr.count(w1) || r.ptr.count(w3))) {
-                    mute = true;
-                    break;
-                }
-        char k[96];
-        std::snprintf(k, sizeof k, "%s#%d#%08X#%08X", g_fetch_tag.c_str(), int(tm + 0.5f), unsigned(w1), unsigned(w3));
-        if (lines < 600 && seen.insert(k).second) {
-            lines++;
-            uint32_t b[4] = {0, 0, 0, 0};
-            if (PtrOk2(w3)) for (int i = 0; i < 4; i++) b[i] = R32(w3 + 4 * i);
-            DbgLog("c16 %s s=%d t14=%.2f ev=%08X t=%.1f ret=%08X w1=%08X w2=%08X w3=%08X n1=\"%s\" blk=%08X %08X %08X %08X n3=\"%s\" mute=%d\n",
-                   g_fetch_tag.c_str(), g_c9_sample, double(g_fetch_real), unsigned(evt), double(tm), unsigned(R32(e)), unsigned(w1), unsigned(w2),
-                   unsigned(w3), StrAt(w1).c_str(), unsigned(b[0]), unsigned(b[1]), unsigned(b[2]), unsigned(b[3]), StrAt(b[3]).c_str(), mute ? 1 : 0);
-        }
-        if (mute && mlines < 12) {
-            mlines++;
-            DbgLog("c17 %s muted event t=%.1f w1=%08X w3=%08X at t14=%.2f\n", g_fetch_tag.c_str(), double(tm), unsigned(w1), unsigned(w3), double(g_fetch_real));
-        }
-        if (mute) {
-            saved = R32(state + 0x84);
-            W32(state + 0x84, 0);
-        }
-    }
-    __imp__sub_00097F80(ctx, base);
-    if (mute) W32(state + 0x84, saved);
-}
-X86_EXTERN_FUNC(__imp__sub_00091C20);
-X86_FUNC(sub_00091C20) {
-    uint32_t esp0 = ctx.esp;
-    uint32_t ret = R32(esp0), dst = R32(esp0 + 4);
-    __imp__sub_00091C20(ctx, base);
-    if (ret == 0x9C03D) {
-        PoseSlotLog(1, dst);
-        ApplyOut(dst);
-    }
-}
-X86_EXTERN_FUNC(__imp__sub_00092290);
-X86_FUNC(sub_00092290) {
-    uint32_t esp0 = ctx.esp;
-    uint32_t ret = R32(esp0), dst = R32(esp0 + 4);
-    __imp__sub_00092290(ctx, base);
-    if (ret == 0x9C099) {
-        PoseSlotLog(2, dst);
-        ApplyOut(dst);
-    }
-}
 
 X86_EXTERN_FUNC(__imp__sub_00098450);
 X86_FUNC(sub_00098450) {
     if (!g_fetch_active) return __imp__sub_00098450(ctx, base);
     uint32_t esp0 = ctx.esp;
     if (R32(esp0 + 4) != g_fetch_clip) return __imp__sub_00098450(ctx, base);
-    {
-        static std::set<std::string> dumped;
-        if (dumped.insert(g_fetch_tag).second) TreeDump(g_fetch_tag, g_fetch_clip, R32(esp0 + 8));
-    }
     float cur = G<float>(esp0 + 0x10);
-    uint32_t ret = R32(esp0);
-    int n = g_bh_calls[12];
-    g_h_callers[ret]++;
-    int slot;
-    float saved;
-    bool hw = BhEnter(12, esp0, ctx.ecx, slot, saved);   // counts the call, c9 lines, hold by bone_hold.txt (FUNC 98450, ARG 4)
-    {
-        static std::map<std::string, int> shown;
-        static int total = 0;
-        int& sh = shown[g_fetch_tag];
-        if (sh < 90 && total < 500) {
-            sh++;
-            total++;
-            DbgLog("c11 %s s=%d t14=%.2f n=%d ret=%08X a2=%08X a3=%08X a4=%08X(%.3f) a5=%08X a6=%08X\n", g_fetch_tag.c_str(), g_c9_sample,
-                   double(g_fetch_real), n, unsigned(ret), unsigned(R32(esp0 + 8)), unsigned(R32(esp0 + 12)), unsigned(R32(esp0 + 16)),
-                   double(G<float>(esp0 + 16)), unsigned(R32(esp0 + 20)), unsigned(R32(esp0 + 24)));
-        }
-    }
-    bool swap = !hw && g_fetch_cap > 0 && std::fabs(cur - g_fetch_real) < 0.51f && cur > g_fetch_cap;
+    bool swap = g_fetch_cap > 0 && std::fabs(cur - g_fetch_real) < 0.51f && cur > g_fetch_cap;
     if (swap) G<float>(esp0 + 0x10) = g_fetch_cap;
     __imp__sub_00098450(ctx, base);
     if (swap) G<float>(esp0 + 0x10) = cur;
-    BhLeave(esp0, hw, slot, saved);
 }
 
 X86_EXTERN_FUNC(__imp__sub_00097E00);
-// dbg17: THE OTHER CLIPS. Only the player's fire clip was watched until now. Every other clip the sampler runs within 0.8 s of a fire
-// sample is logged here (c18: id by first sight, the clip's first 8 words, the caller; later lines show its time moving), and the
-// controllers updated in that window are listed by sub_0017B130 (c19). CLP rules hold the time field of a clip (clip + 0x14) at CAP
-// during its sampling only; the value is put back right after, so the game's own timeline is untouched.
-static long g_last_fire_ms = -1000000;
-static std::map<uint32_t, int> g_oc_id, g_oc_n;
-static bool OtherClipEnter(uint32_t clip, uint32_t ret, float& saved) {
-    if (!clip || !PtrOk2(clip) || DbgMs() - g_last_fire_ms > 800) return false;
-    auto it = g_oc_id.find(clip);
-    if (it == g_oc_id.end()) it = g_oc_id.emplace(clip, int(g_oc_id.size())).first;
-    int id = it->second, n = ++g_oc_n[clip];
-    static int lines = 0;
-    bool show = n == 1 || n == 2 || n == 3 || n == 10 || n == 30 || n == 60 || n == 120 || n == 240;
-    if (show && lines < 700) {
-        lines++;
-        uint32_t w[8];
-        for (int i = 0; i < 8; i++) w[i] = R32(clip + 4 * i);
-        DbgLog("c18 id=%d n=%d clip=%08X t=%.2f len=%.1f ret=%08X w: %08X %08X %08X %08X %08X %08X %08X %08X weapon=%s\n", id, n, unsigned(clip),
-               double(G<float>(clip + 0x14)), double(G<float>(clip + 0x1C)), unsigned(ret), unsigned(w[0]), unsigned(w[1]), unsigned(w[2]),
-               unsigned(w[3]), unsigned(w[4]), unsigned(w[5]), unsigned(w[6]), unsigned(w[7]), g_fetch_weapon.c_str());
-    }
-    LoadBoneHold();
-    for (int pass = 0; pass < 2; pass++)
-        for (const BoneRule& r : g_bone_rules)
-            if (r.type == -5 && r.cap > 0 && r.key == (pass == 0 ? g_fetch_weapon : std::string("ALL")) && (r.all || r.idx.count(id))) {
-                float t = G<float>(clip + 0x14);
-                if (std::isfinite(t) && t > r.cap && t < 100000.0f) {
-                    saved = t;
-                    G<float>(clip + 0x14) = r.cap;
-                    return true;
-                }
-                return false;
-            }
-    return false;
-}
 X86_FUNC(sub_00097E00) {
     uint32_t clip = R32(ctx.esp + 4);
     uint32_t ac = g_kick_ac;
     AimPinRefresh();
     bool fire = clip && ac && R32(ac + kAnimClip) == clip && R32(ac + kAnimOwner) == Player() &&
                 IsFireClip(ReadCString(ac + kAnimName, 13));
-    if (!fire) {
-        float held = 0;
-        bool hold = OtherClipEnter(clip, R32(ctx.esp), held);
-        __imp__sub_00097E00(ctx, base);
-        if (hold) G<float>(clip + 0x14) = held;
-        return;
-    }
-    g_last_fire_ms = DbgMs();
-    float cap = RecoilCap();  // 0: the pose is the game's own, the fetch is only watched for the tree file
-    {
-        uint32_t w0 = R32(Player() + kPlayerWeapon);
-        const char* wn0 = w0 ? TableName(R32(w0 + kWeaponData)) : nullptr;
-        g_fetch_weapon = wn0 ? wn0 : "X";
-        g_fetch_tag = g_fetch_weapon + "_" + ReadCString(ac + kAnimName, 13);
-    }
-    std::memset(g_bh_calls, 0, sizeof g_bh_calls);
-    std::memset(g_nd_calls, 0, sizeof g_nd_calls);
-    g_nd_seq = 0;
-    g_nd_depth = 0;
-    {
-        int& k = g_nd_k[g_fetch_tag];
-        g_nd_log = (k < 3 || (k % 30) == 0) && k < 600;
-        k++;
-    }
-    g_h_callers.clear();
-    g_c9_sample++;
-    float real14 = G<float>(clip + 0x14);
-    {   // a new burst (the clip time went back): the pinned transforms are captured again
-        static float prev14 = 1e9f;
-        if (real14 < prev14) g_pin_snap.clear();
-        prev14 = real14;
-    }
+    float cap = fire ? RecoilCap() : 0.0f;  // 0: the pose is the game's own
+    if (cap <= 0) return __imp__sub_00097E00(ctx, base);
     g_fetch_active = true;
     g_fetch_clip = clip;
-    g_fetch_real = real14;
+    g_fetch_real = G<float>(clip + 0x14);
     g_fetch_cap = cap;
     __imp__sub_00097E00(ctx, base);
     g_fetch_active = false;
-    if (g_nd_log && g_nd_lines < 1500) {   // dbg15: nodes visited in this sample, per type
-        std::string ty;
-        char tb[32];
-        for (int i = 0; i < 26; i++) if (g_nd_calls[i]) { std::snprintf(tb, sizeof tb, " T%d=%d", i, g_nd_calls[i]); ty += tb; }
-        DbgLog("c13 sample %s s=%d t14=%.2f nodes=%d types:%s\n", g_fetch_tag.c_str(), g_c9_sample, real14, g_nd_seq, ty.c_str());
-    }
-    {   // one line per sample (first 12 per weapon and clip): how many interpolator calls one pose takes
-        static std::map<std::string, int> sums;
-        int& k = sums[g_fetch_tag];
-        if (k < 12 && g_c9_lines < 500) {
-            k++;
-            g_c9_lines++;
-            std::string cnt;
-            char cb[40];
-            for (int i = 0; i < kBhN; i++) {
-                std::snprintf(cb, sizeof cb, " %05X=%d", unsigned(kBhAddr[i]), g_bh_calls[i]);
-                cnt += cb;
-            }
-            DbgLog("c9 sample %s s=%d t14=%.2f calls:%s\n", g_fetch_tag.c_str(), g_c9_sample, real14, cnt.c_str());
-            std::string cl;
-            for (const auto& kv : g_h_callers) {
-                std::snprintf(cb, sizeof cb, " %05X=%d", unsigned(kv.first), kv.second);
-                cl += cb;
-            }
-            DbgLog("c11 sample %s s=%d t14=%.2f calls98450=%d callers:%s\n", g_fetch_tag.c_str(), g_c9_sample, real14, g_bh_calls[12], cl.c_str());
-        }
-    }
-    if (cap > 0) {   // one line per burst: how far the clip got, to choose a cap (at most 12 lines per weapon and clip)
-        static float peak = 0, last = 0;
-        static std::string who;
-        static float who_cap = 0;
-        static std::map<std::string, int> lines;
-        if (real14 + 0.5f < last && peak > 0) {
-            int& n = lines[who];
-            if (n < 12) {
-                n++;
-                DbgLog("recoil %s cap=%.1f peak_t14=%.1f\n", who.c_str(), who_cap, peak);
-            }
-            peak = 0;
-        }
-        peak = std::max(peak, real14);
-        last = real14;
-        who_cap = cap;
-        uint32_t w = R32(Player() + kPlayerWeapon);
-        const char* wn = w ? TableName(R32(w + kWeaponData)) : nullptr;
-        who = std::string(wn ? wn : "-") + "/" + ReadCString(ac + kAnimName, 13) + " len=" +
-              std::to_string(int(G<float>(clip + 0x1C)));
-    }
 }
 
 // A fire clip that ends before the wait does hands over to the idle early: the request would start it again.
@@ -1957,117 +979,23 @@ X86_FUNC(sub_00097E00) {
 X86_EXTERN_FUNC(__imp__sub_0017B130);
 X86_FUNC(sub_0017B130) {
     uint32_t ac = R32(ctx.esp + 4);
-    {   // dbg17: the controllers updated within 0.8 s of a fire sample (c19), once per controller and clip name
-        static std::set<std::string> seenc;
-        static int clines = 0;
-        if (clines < 300 && PtrOk2(ac) && DbgMs() - g_last_fire_ms < 800) {
-            std::string nm = ReadCString(ac + kAnimName, 13);
-            char k[80];
-            std::snprintf(k, sizeof k, "%08X#%s", unsigned(ac), nm.c_str());
-            if (seenc.insert(k).second) {
-                clines++;
-                DbgLog("c19 ac=%08X owner=%08X%s clip=%08X name=\"%s\"\n", unsigned(ac), unsigned(R32(ac + kAnimOwner)),
-                       R32(ac + kAnimOwner) == Player() ? "(player)" : "", unsigned(R32(ac + kAnimClip)), nm.c_str());
-            }
-        }
-    }
     uint32_t from = R32(ac + kAnimFrom);
     uint32_t clip = R32(ac + kAnimClip);
     if (R32(ac + kAnimOwner) != Player() || !clip) return __imp__sub_0017B130(ctx, base);
     int16_t slot = G<int16_t>(clip + kAnimClipFadeSlot);
     uint32_t fade = clip + kAnimClipFades + slot * kFadeSize;
-    g_kick_ac = ac;  // kick 0 is held in sub_00097E00 now, the times of the clip are left alone here
+    g_kick_ac = ac;  // the fire clip's pose is held in sub_00097E00, the times of the clip are left alone here
     __imp__sub_0017B130(ctx, base);
     {
         uint32_t now_clip = R32(ac + kAnimClip);
         std::string clip_name = ReadCString(ac + kAnimName, 13);
-        {   // every change of the player's clip, with the weapon's state and the aim: to find the idle clip
-            static std::string last_name;
-            static int change_logs = 0;
-            bool spam = clip_name.size() >= 5 && (clip_name.compare(clip_name.size() - 5, 5, "S_100") == 0 ||
-                                                  clip_name.compare(clip_name.size() - 5, 5, "S_190") == 0 ||
-                                                  clip_name.compare(clip_name.size() - 5, 5, "S_110") == 0);
-            if (clip_name != last_name && !spam && change_logs < 1500) {
-                change_logs++;
-                last_name = clip_name;
-                uint32_t w = R32(Player() + kPlayerWeapon);
-                const char* wn = w ? TableName(R32(w + kWeaponData)) : nullptr;
-                DbgLog("clip %s weapon=%s state=%u own_aim=%.2f t14=%.2f len=%.1f\n", clip_name.c_str(), wn ? wn : "-",
-                       w ? R32(w + kWeaponState) : 0u, g_own_aim_pub.load(), now_clip ? G<float>(now_clip + 0x14) : 0.f,
-                       now_clip ? G<float>(now_clip + 0x1C) : 0.f);
-            }
-        }
-        {   // one line when a fire clip starts and one when it ends (frames it lasted): a single shot too
-            static bool in_fire = false;
-            static uint32_t fire_clip = 0;
-            static int fire_slot = -1, fire_frames = 0, fire_logs = 0;
-            static float fire_last_t14 = 0;
-            bool is_fire = now_clip && IsFireClip(clip_name);
-            int now_slot = now_clip ? int(G<int16_t>(now_clip + kAnimClipFadeSlot)) : -1;
-            if (in_fire && (!is_fire || now_clip != fire_clip || now_slot != fire_slot)) {
-                if (fire_logs < 300) {
-                    fire_logs++;
-                    DbgLog("fire end ms=%ld frames=%d last_t14=%.2f\n", DbgMs(), fire_frames, fire_last_t14);
-                }
-                in_fire = false;
-            }
-            if (is_fire) {
-                if (!in_fire) {
-                    in_fire = true;
-                    fire_clip = now_clip;
-                    fire_slot = now_slot;
-                    fire_frames = 0;
-                    if (fire_logs < 300) {
-                        fire_logs++;
-                        DbgLog("fire start ms=%ld %s slot=%d len=%.1f kick0=%d aim=%d\n", DbgMs(), clip_name.c_str(),
-                               now_slot, G<float>(now_clip + 0x1C), int(KickOff()),
-                               int(g_vm[0] != 0 || g_vm[1] != 0 || g_vm[2] != 0));
-                    }
-                }
-                fire_frames++;
-                fire_last_t14 = G<float>(now_clip + 0x14);
-            }
-            std::snprintf(g_dbg_clip, sizeof(g_dbg_clip), "%s", is_fire ? clip_name.c_str() : "-");
-            g_dbg_t14 = now_clip ? G<float>(now_clip + 0x14) : 0;
-            g_dbg_slot = now_slot;
-            g_dbg_fire_frames = in_fire ? fire_frames : 0;
-        }
-        if (now_clip && IsFireClip(clip_name)) {
-            static std::map<std::string, int> seen;  // the first frames of each fire clip to ads_test.log
-            int& n = seen[clip_name];
-            if (n < 12 && seen.size() <= 24) {
-                n++;
-                if (FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/ads_test.log", "a")) {
-                    std::fprintf(log, "fire clip %s #%d slot=%d t14=%.2f t18=%.2f len=%.1f t20=%.3f t24=%.3f\n",
-                                 clip_name.c_str(), n, int(G<int16_t>(now_clip + kAnimClipFadeSlot)),
-                                 G<float>(now_clip + 0x14), G<float>(now_clip + 0x18), G<float>(now_clip + 0x1C),
-                                 G<float>(now_clip + 0x20), G<float>(now_clip + 0x24));
-                    std::fclose(log);
-                }
-            }
-        }
-        {   // idle hold at the aim of the SPAS 12 / Remington
-            static uint32_t idle_clip = 0;
-            static float idle_time[2];
-            static int idle_logs = 0;
+        {   // STEADY AIM: the idle clip (SPAS 12 / Remington) and the aim clip (G36C / AKM) stand still at the aim
             bool idle_name = clip_name.size() >= 5 && clip_name.compare(clip_name.size() - 5, 5, "S_001") == 0;
-            bool aim_name = clip_name.size() >= 5 && clip_name.compare(clip_name.size() - 5, 5, "S_190") == 0;  // G36C / AKM aim clip
+            bool aim_name = clip_name.size() >= 5 && clip_name.compare(clip_name.size() - 5, 5, "S_190") == 0;
             if (now_clip && (idle_name || aim_name) && IdleHoldNow()) {
-                if (idle_clip != now_clip) {
-                    idle_clip = now_clip;
-                    idle_time[0] = 0;  // the first frame: the hand on the gun
-                    idle_time[1] = 0;
-                    if (idle_logs < 40) {
-                        idle_logs++;
-                        DbgLog("idle hold %s t14=%.2f t18=%.2f len=%.1f\n", clip_name.c_str(), idle_time[0], idle_time[1],
-                               G<float>(now_clip + 0x1C));
-                    }
-                }
-                float hold_at = aim_name ? g_aim_pin : idle_time[0];
+                float hold_at = aim_name ? g_aim_pin : 0.0f;  // the idle clip: its first frame, the hand on the gun
                 G<float>(now_clip + 0x14) = hold_at;
                 G<float>(now_clip + 0x18) = hold_at;
-            } else {
-                idle_clip = 0;
             }
         }
     }
