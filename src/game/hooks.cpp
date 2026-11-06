@@ -284,7 +284,7 @@ static void LoadAdsShifts(uint32_t data, const char* type) {
     static bool tagged = false;
     if (!tagged) {
         tagged = true;
-        DbgLog("build: dbg14 (aim bit fixed 0x80; sub_00098450 watched: c11 log, hold by call number or by caller @ADDR; c9/c10 kept)\n");
+        DbgLog("build: dbg15 (PLAN D: node handlers T0-T25 wrapped: c12 per node, c13 per sample, hold by T<type> in bone_hold.txt; c10w c14 pose logs; dbg14 kept)\n");
     }
     std::ifstream f("/storage/emulated/0/Black/SaveData/ads_view.txt");
     std::string line;
@@ -989,7 +989,8 @@ static float g_fetch_real = 0, g_fetch_cap = 0;
 static const uint32_t kBhAddr[] = {0x9BEB0, 0x9C2C0, 0x9C0C0, 0x9B160, 0x9B280, 0x9BAB0, 0x93B00, 0x92570, 0x9BBC0, 0x9BD20, 0x9BC40, 0x9BE70, 0x98450};
 static const int kBhN = 13;
 static int g_bh_calls[kBhN];
-struct BoneRule { std::string key; uint32_t func = 0; int arg = 0; float cap = 0; bool all = false; std::set<int> idx; std::set<uint32_t> ret; };
+struct BoneRule { std::string key; uint32_t func = 0; int arg = 0; float cap = 0; bool all = false; std::set<int> idx; std::set<uint32_t> ret;
+                  int type = -1; std::set<uint32_t> ptr; };   // dbg15: type >= 0 = a node type rule (FUNC written T22), ptr = node addresses (IDX #ADDR)
 static std::vector<BoneRule> g_bone_rules;
 static std::chrono::steady_clock::time_point g_bone_checked;
 static void LoadBoneHold() {
@@ -1006,6 +1007,8 @@ static void LoadBoneHold() {
                        "# once it is above. IDX = which calls of one sample (0,1,2...) or * for all. See the c9 lines of ads_test.log.\n"
                        "# 98450: time is ARG 4. IDX = call numbers or @96C80,96E42 (return addresses of the callers: 93906 96C80 96E42 96EEA).\n"
                        "# PIN: ARG -1 (FUNC 9BBC0, IDX = decimal ids) or -2 (FUNC 9BBC0 or 92570, IDX = call numbers): CAP = t14 where the transform is captured and then held.\n"
+                       "# dbg15: FUNC = T0..T25 holds the time of a NODE TYPE (ARG 4 = current time, 5 = previous). IDX = call numbers of that type\n"
+                       "# in one sample, * for all, or #ADDR,ADDR = node addresses from the c12 lines. Example: HVY T22 4 4 *\n"
                        "ALL 9BEB0 0 0 *\n", w);
             std::fclose(w);
         }
@@ -1024,7 +1027,8 @@ static void LoadBoneHold() {
         std::string ids;
         if (t.size() >= 5) {
             r.key = t[0];
-            r.func = uint32_t(std::strtoul(t[1].c_str(), nullptr, 16));
+            if (t[1][0] == 'T' || t[1][0] == 't') { r.type = std::atoi(t[1].c_str() + 1); r.func = 0; }   // dbg15: T0..T25 = node type
+            else r.func = uint32_t(std::strtoul(t[1].c_str(), nullptr, 16));
             r.arg = std::atoi(t[2].c_str());
             r.cap = float(std::atof(t[3].c_str()));
             ids = t[4];
@@ -1036,7 +1040,11 @@ static void LoadBoneHold() {
             ids = t[3];
         } else continue;
         if (ids == "*") r.all = true;
-        else if (!ids.empty() && ids[0] == '@') {   // @96C80,96E42 = the calls whose return address is one of these (hex)
+        else if (!ids.empty() && ids[0] == '#') {   // dbg15: #ADDR[,ADDR] = node addresses (hex) from the c12 lines
+            std::istringstream is(ids.substr(1));
+            std::string x;
+            while (std::getline(is, x, ',')) if (!x.empty()) r.ptr.insert(uint32_t(std::strtoul(x.c_str(), nullptr, 16)));
+        } else if (!ids.empty() && ids[0] == '@') {   // @96C80,96E42 = the calls whose return address is one of these (hex)
             std::istringstream is(ids.substr(1));
             std::string x;
             while (std::getline(is, x, ',')) if (!x.empty()) r.ret.insert(uint32_t(std::strtoul(x.c_str(), nullptr, 16)));
@@ -1132,6 +1140,19 @@ static void BhAfter(int fid, uint32_t ret_addr, uint32_t eax, int n, uint32_t de
             DbgLog("c10 %s f=%05X s=%d t14=%.2f n=%d id=%u ret=%08X dest=%08X eax=%08X ok=%d out:%s\n", g_fetch_tag.c_str(),
                    unsigned(kBhAddr[fid]), g_c9_sample, double(g_fetch_real), n, unsigned(id), unsigned(ret_addr), unsigned(dest),
                    unsigned(eax), ok ? 1 : 0, o.c_str());
+        }
+    }
+    if (ok) {   // dbg15: one line per clip time bucket of 10, to see the output beyond t14 12 (c10w)
+        static std::set<std::string> seenw;
+        static int linesw = 0;
+        char kw[128];
+        std::snprintf(kw, sizeof kw, "%s#%d#%d", g_fetch_tag.c_str(), fid, int(g_fetch_real) / 10);
+        if (linesw < 700 && seenw.insert(kw).second) {
+            linesw++;
+            std::string o;
+            char b[40];
+            for (int i = 0; i < 8; i++) { std::snprintf(b, sizeof b, " %.4f", double(G<float>(dest + 4 * i))); o += b; }
+            DbgLog("c10w %s f=%05X t14=%.2f n=%d id=%u out:%s\n", g_fetch_tag.c_str(), unsigned(kBhAddr[fid]), double(g_fetch_real), n, unsigned(id), o.c_str());
         }
     }
     if (!ok) return;
@@ -1281,6 +1302,388 @@ X86_FUNC(sub_0009BE70) {
     BhLeave(esp0, sw, slot, saved);
 }
 
+// ---- dbg15 (PLAN D): every node handler of the jump table at VA 0x29B1D8 is wrapped. 98450 only dispatches (it jumps to the
+// handler of the node's type), and the composite types call their children through the same table, so only the handlers see
+// every node of the tree. Types 0-25, type 12 (a shared stub at 0x2B700) is left alone. If the build says a symbol sub_000XXXXX
+// is undefined, set that type's ND_Tn below to 0 and tell which one.
+#ifndef ND_T0
+#define ND_T0 1
+#endif
+#ifndef ND_T1
+#define ND_T1 1
+#endif
+#ifndef ND_T2
+#define ND_T2 1
+#endif
+#ifndef ND_T3
+#define ND_T3 1
+#endif
+#ifndef ND_T4
+#define ND_T4 1
+#endif
+#ifndef ND_T5
+#define ND_T5 1
+#endif
+#ifndef ND_T6
+#define ND_T6 1
+#endif
+#ifndef ND_T7
+#define ND_T7 1
+#endif
+#ifndef ND_T8
+#define ND_T8 1
+#endif
+#ifndef ND_T9
+#define ND_T9 1
+#endif
+#ifndef ND_T10
+#define ND_T10 1
+#endif
+#ifndef ND_T11
+#define ND_T11 1
+#endif
+#ifndef ND_T13
+#define ND_T13 1
+#endif
+#ifndef ND_T14
+#define ND_T14 1
+#endif
+#ifndef ND_T15
+#define ND_T15 1
+#endif
+#ifndef ND_T16
+#define ND_T16 1
+#endif
+#ifndef ND_T17
+#define ND_T17 1
+#endif
+#ifndef ND_T18
+#define ND_T18 1
+#endif
+#ifndef ND_T19
+#define ND_T19 1
+#endif
+#ifndef ND_T20
+#define ND_T20 1
+#endif
+#ifndef ND_T21
+#define ND_T21 1
+#endif
+#ifndef ND_T22
+#define ND_T22 1
+#endif
+#ifndef ND_T23
+#define ND_T23 1
+#endif
+#ifndef ND_T24
+#define ND_T24 1
+#endif
+#ifndef ND_T25
+#define ND_T25 1
+#endif
+static int g_nd_calls[26];            // calls per type in this sample (clip = the fire clip only)
+static int g_nd_seq = 0, g_nd_depth = 0, g_nd_lines = 0;
+static bool g_nd_log = false;         // this sample is written to the log (first 3 of a weapon and clip, then every 30th)
+static std::map<std::string, int> g_nd_k;
+struct NodeHold { bool act = false, held = false; int slot = 0; float saved = 0; };
+// Handler args (stack, cdecl): 1 clip, 2 node, 3 pointer, 4 time (float), 5 previous time (float), 6 flags.
+static NodeHold NodeEnter(int type, uint32_t esp0) {
+    NodeHold h;
+    if (!g_fetch_active || R32(esp0 + 4) != g_fetch_clip || type < 0 || type > 25) return h;
+    h.act = true;
+    int n = g_nd_calls[type]++;
+    int q = g_nd_seq++;
+    uint32_t node = R32(esp0 + 8);
+    if (g_nd_log && g_nd_lines < 1500) {
+        g_nd_lines++;
+        uint32_t w[5] = {0, 0, 0, 0, 0};
+        if (PtrOk2(node)) for (int i = 0; i < 5; i++) w[i] = R32(node + 4 * i);
+        DbgLog("c12 %s s=%d q=%d d=%d T=%d n=%d node=%08X ret=%08X t=%.3f p=%.3f a3=%08X a6=%08X w: %08X %08X %08X %08X %08X\n",
+               g_fetch_tag.c_str(), g_c9_sample, q, g_nd_depth, type, n, unsigned(node), unsigned(R32(esp0)), double(G<float>(esp0 + 0x10)),
+               double(G<float>(esp0 + 0x14)), unsigned(R32(esp0 + 12)), unsigned(R32(esp0 + 0x18)), unsigned(w[0]), unsigned(w[1]), unsigned(w[2]),
+               unsigned(w[3]), unsigned(w[4]));
+    }
+    LoadBoneHold();
+    const BoneRule* use = nullptr;
+    for (int pass = 0; pass < 2 && !use; pass++)
+        for (const BoneRule& r : g_bone_rules)
+            if (r.type == type && r.key == (pass == 0 ? g_fetch_weapon : std::string("ALL")) && (r.arg == 4 || r.arg == 5) && r.cap > 0 &&
+                (r.all || r.idx.count(n) || r.ptr.count(node))) {
+                use = &r;
+                break;
+            }
+    if (use) {
+        float v = G<float>(esp0 + 4 * use->arg);
+        if (std::isfinite(v) && v > use->cap && v < 100000.0f) {   // the value is held, not skipped; put back on leaving
+            h.held = true;
+            h.slot = use->arg;
+            h.saved = v;
+            G<float>(esp0 + 4 * h.slot) = use->cap;
+        }
+    }
+    g_nd_depth++;
+    return h;
+}
+static void NodeLeave(const NodeHold& h, uint32_t esp0) {
+    if (!h.act) return;
+    g_nd_depth--;
+    if (h.held) G<float>(esp0 + 4 * h.slot) = h.saved;
+}
+#if ND_T0
+X86_EXTERN_FUNC(__imp__sub_00098970);
+X86_FUNC(sub_00098970) {
+    uint32_t e = ctx.esp;
+    NodeHold h = NodeEnter(0, e);
+    __imp__sub_00098970(ctx, base);
+    NodeLeave(h, e);
+}
+#endif
+#if ND_T1
+X86_EXTERN_FUNC(__imp__sub_00098A60);
+X86_FUNC(sub_00098A60) {
+    uint32_t e = ctx.esp;
+    NodeHold h = NodeEnter(1, e);
+    __imp__sub_00098A60(ctx, base);
+    NodeLeave(h, e);
+}
+#endif
+#if ND_T2
+X86_EXTERN_FUNC(__imp__sub_00098CB0);
+X86_FUNC(sub_00098CB0) {
+    uint32_t e = ctx.esp;
+    NodeHold h = NodeEnter(2, e);
+    __imp__sub_00098CB0(ctx, base);
+    NodeLeave(h, e);
+}
+#endif
+#if ND_T3
+X86_EXTERN_FUNC(__imp__sub_000990E0);
+X86_FUNC(sub_000990E0) {
+    uint32_t e = ctx.esp;
+    NodeHold h = NodeEnter(3, e);
+    __imp__sub_000990E0(ctx, base);
+    NodeLeave(h, e);
+}
+#endif
+#if ND_T4
+X86_EXTERN_FUNC(__imp__sub_00099130);
+X86_FUNC(sub_00099130) {
+    uint32_t e = ctx.esp;
+    NodeHold h = NodeEnter(4, e);
+    __imp__sub_00099130(ctx, base);
+    NodeLeave(h, e);
+}
+#endif
+#if ND_T5
+X86_EXTERN_FUNC(__imp__sub_000999B0);
+X86_FUNC(sub_000999B0) {
+    uint32_t e = ctx.esp;
+    NodeHold h = NodeEnter(5, e);
+    __imp__sub_000999B0(ctx, base);
+    NodeLeave(h, e);
+}
+#endif
+#if ND_T6
+X86_EXTERN_FUNC(__imp__sub_00099A80);
+X86_FUNC(sub_00099A80) {
+    uint32_t e = ctx.esp;
+    NodeHold h = NodeEnter(6, e);
+    __imp__sub_00099A80(ctx, base);
+    NodeLeave(h, e);
+}
+#endif
+#if ND_T7
+X86_EXTERN_FUNC(__imp__sub_00099A30);
+X86_FUNC(sub_00099A30) {
+    uint32_t e = ctx.esp;
+    NodeHold h = NodeEnter(7, e);
+    __imp__sub_00099A30(ctx, base);
+    NodeLeave(h, e);
+}
+#endif
+#if ND_T8
+X86_EXTERN_FUNC(__imp__sub_000983D0);
+X86_FUNC(sub_000983D0) {
+    uint32_t e = ctx.esp;
+    NodeHold h = NodeEnter(8, e);
+    __imp__sub_000983D0(ctx, base);
+    NodeLeave(h, e);
+}
+#endif
+#if ND_T9
+X86_EXTERN_FUNC(__imp__sub_00099AD0);
+X86_FUNC(sub_00099AD0) {
+    uint32_t e = ctx.esp;
+    NodeHold h = NodeEnter(9, e);
+    __imp__sub_00099AD0(ctx, base);
+    NodeLeave(h, e);
+}
+#endif
+#if ND_T10
+X86_EXTERN_FUNC(__imp__sub_00099B20);
+X86_FUNC(sub_00099B20) {
+    uint32_t e = ctx.esp;
+    NodeHold h = NodeEnter(10, e);
+    __imp__sub_00099B20(ctx, base);
+    NodeLeave(h, e);
+}
+#endif
+#if ND_T11
+X86_EXTERN_FUNC(__imp__sub_00099BB0);
+X86_FUNC(sub_00099BB0) {
+    uint32_t e = ctx.esp;
+    NodeHold h = NodeEnter(11, e);
+    __imp__sub_00099BB0(ctx, base);
+    NodeLeave(h, e);
+}
+#endif
+#if ND_T13
+X86_EXTERN_FUNC(__imp__sub_00099C60);
+X86_FUNC(sub_00099C60) {
+    uint32_t e = ctx.esp;
+    NodeHold h = NodeEnter(13, e);
+    __imp__sub_00099C60(ctx, base);
+    NodeLeave(h, e);
+}
+#endif
+#if ND_T14
+X86_EXTERN_FUNC(__imp__sub_00099F10);
+X86_FUNC(sub_00099F10) {
+    uint32_t e = ctx.esp;
+    NodeHold h = NodeEnter(14, e);
+    __imp__sub_00099F10(ctx, base);
+    NodeLeave(h, e);
+}
+#endif
+#if ND_T15
+X86_EXTERN_FUNC(__imp__sub_0009A1C0);
+X86_FUNC(sub_0009A1C0) {
+    uint32_t e = ctx.esp;
+    NodeHold h = NodeEnter(15, e);
+    __imp__sub_0009A1C0(ctx, base);
+    NodeLeave(h, e);
+}
+#endif
+#if ND_T16
+X86_EXTERN_FUNC(__imp__sub_0009A230);
+X86_FUNC(sub_0009A230) {
+    uint32_t e = ctx.esp;
+    NodeHold h = NodeEnter(16, e);
+    __imp__sub_0009A230(ctx, base);
+    NodeLeave(h, e);
+}
+#endif
+#if ND_T17
+X86_EXTERN_FUNC(__imp__sub_0009A3F0);
+X86_FUNC(sub_0009A3F0) {
+    uint32_t e = ctx.esp;
+    NodeHold h = NodeEnter(17, e);
+    __imp__sub_0009A3F0(ctx, base);
+    NodeLeave(h, e);
+}
+#endif
+#if ND_T18
+X86_EXTERN_FUNC(__imp__sub_0009A2E0);
+X86_FUNC(sub_0009A2E0) {
+    uint32_t e = ctx.esp;
+    NodeHold h = NodeEnter(18, e);
+    __imp__sub_0009A2E0(ctx, base);
+    NodeLeave(h, e);
+}
+#endif
+#if ND_T19
+X86_EXTERN_FUNC(__imp__sub_0009A660);
+X86_FUNC(sub_0009A660) {
+    uint32_t e = ctx.esp;
+    NodeHold h = NodeEnter(19, e);
+    __imp__sub_0009A660(ctx, base);
+    NodeLeave(h, e);
+}
+#endif
+#if ND_T20
+X86_EXTERN_FUNC(__imp__sub_00098400);
+X86_FUNC(sub_00098400) {
+    uint32_t e = ctx.esp;
+    NodeHold h = NodeEnter(20, e);
+    __imp__sub_00098400(ctx, base);
+    NodeLeave(h, e);
+}
+#endif
+#if ND_T21
+X86_EXTERN_FUNC(__imp__sub_0009A920);
+X86_FUNC(sub_0009A920) {
+    uint32_t e = ctx.esp;
+    NodeHold h = NodeEnter(21, e);
+    __imp__sub_0009A920(ctx, base);
+    NodeLeave(h, e);
+}
+#endif
+#if ND_T22
+X86_EXTERN_FUNC(__imp__sub_0009B000);
+X86_FUNC(sub_0009B000) {
+    uint32_t e = ctx.esp;
+    NodeHold h = NodeEnter(22, e);
+    __imp__sub_0009B000(ctx, base);
+    NodeLeave(h, e);
+}
+#endif
+#if ND_T23
+X86_EXTERN_FUNC(__imp__sub_0009A860);
+X86_FUNC(sub_0009A860) {
+    uint32_t e = ctx.esp;
+    NodeHold h = NodeEnter(23, e);
+    __imp__sub_0009A860(ctx, base);
+    NodeLeave(h, e);
+}
+#endif
+#if ND_T24
+X86_EXTERN_FUNC(__imp__sub_00098430);
+X86_FUNC(sub_00098430) {
+    uint32_t e = ctx.esp;
+    NodeHold h = NodeEnter(24, e);
+    __imp__sub_00098430(ctx, base);
+    NodeLeave(h, e);
+}
+#endif
+#if ND_T25
+X86_EXTERN_FUNC(__imp__sub_0009A9A0);
+X86_FUNC(sub_0009A9A0) {
+    uint32_t e = ctx.esp;
+    NodeHold h = NodeEnter(25, e);
+    __imp__sub_0009A9A0(ctx, base);
+    NodeLeave(h, e);
+}
+#endif
+// dbg15: where the pose is written. 9BEB0 copies a 32 byte transform into the slot 9BC40 gave (91C20, from 9C03D) or builds it
+// with 92290 (from 9C099). The slot is logged once per t14 bucket of 10 (c14).
+static void PoseSlotLog(int which, uint32_t dst) {
+    if (!g_fetch_active || !PtrOk2(dst)) return;
+    static std::set<std::string> seen;
+    static int lines = 0;
+    char k[128];
+    std::snprintf(k, sizeof k, "%s#%d#%d", g_fetch_tag.c_str(), which, int(g_fetch_real) / 10);
+    if (lines >= 700 || !seen.insert(k).second) return;
+    lines++;
+    std::string o;
+    char b[40];
+    for (int i = 0; i < 8; i++) { std::snprintf(b, sizeof b, " %.4f", double(G<float>(dst + 4 * i))); o += b; }
+    DbgLog("c14 %s w=%d s=%d t14=%.2f dst=%08X out:%s\n", g_fetch_tag.c_str(), which, g_c9_sample, double(g_fetch_real), unsigned(dst), o.c_str());
+}
+X86_EXTERN_FUNC(__imp__sub_00091C20);
+X86_FUNC(sub_00091C20) {
+    uint32_t esp0 = ctx.esp;
+    uint32_t ret = R32(esp0), dst = R32(esp0 + 4);
+    __imp__sub_00091C20(ctx, base);
+    if (ret == 0x9C03D) PoseSlotLog(1, dst);
+}
+X86_EXTERN_FUNC(__imp__sub_00092290);
+X86_FUNC(sub_00092290) {
+    uint32_t esp0 = ctx.esp;
+    uint32_t ret = R32(esp0), dst = R32(esp0 + 4);
+    __imp__sub_00092290(ctx, base);
+    if (ret == 0x9C099) PoseSlotLog(2, dst);
+}
+
 X86_EXTERN_FUNC(__imp__sub_00098450);
 X86_FUNC(sub_00098450) {
     if (!g_fetch_active) return __imp__sub_00098450(ctx, base);
@@ -1332,6 +1735,14 @@ X86_FUNC(sub_00097E00) {
         g_fetch_tag = g_fetch_weapon + "_" + ReadCString(ac + kAnimName, 13);
     }
     std::memset(g_bh_calls, 0, sizeof g_bh_calls);
+    std::memset(g_nd_calls, 0, sizeof g_nd_calls);
+    g_nd_seq = 0;
+    g_nd_depth = 0;
+    {
+        int& k = g_nd_k[g_fetch_tag];
+        g_nd_log = (k < 3 || (k % 30) == 0) && k < 600;
+        k++;
+    }
     g_h_callers.clear();
     g_c9_sample++;
     float real14 = G<float>(clip + 0x14);
@@ -1346,6 +1757,12 @@ X86_FUNC(sub_00097E00) {
     g_fetch_cap = cap;
     __imp__sub_00097E00(ctx, base);
     g_fetch_active = false;
+    if (g_nd_log && g_nd_lines < 1500) {   // dbg15: nodes visited in this sample, per type
+        std::string ty;
+        char tb[32];
+        for (int i = 0; i < 26; i++) if (g_nd_calls[i]) { std::snprintf(tb, sizeof tb, " T%d=%d", i, g_nd_calls[i]); ty += tb; }
+        DbgLog("c13 sample %s s=%d t14=%.2f nodes=%d types:%s\n", g_fetch_tag.c_str(), g_c9_sample, real14, g_nd_seq, ty.c_str());
+    }
     {   // one line per sample (first 12 per weapon and clip): how many interpolator calls one pose takes
         static std::map<std::string, int> sums;
         int& k = sums[g_fetch_tag];
