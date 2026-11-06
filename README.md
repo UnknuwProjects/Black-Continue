@@ -35,20 +35,10 @@ This is a native port, not an emulator.
 3. Copy the game files to one of these locations:
    - `/storage/emulated/0/Black`
    - A folder named `Black` at the root of your SD card.
-4. Use either the USA or Europe release. The game can load a disc image (`.iso`) or `default.xbe` together with its data folders.
-5. Launch the app. It will start the game once the required files are detected.
-
-If All files access is not granted, use this alternative location:
-
-```text
-Android/data/com.racas.black/files/assets
-```
-
-Settings (`black.toml`, `android.toml`, `layout.toml`), save data (`hdd`), logs and shader cache are stored in:
-
-```text
-Android/data/com.racas.black/files
-```
+4. Save data, settings (`black.toml`, `android.toml`, `layout.toml`), logs and shader cache are stored at:
+   - `/storage/emulated/0/Black/SaveData`
+5. Use either the USA or Europe release. The game can load a disc image (`.iso`) or `default.xbe` together with its data folders.
+6. Launch the app. It will start the game once the required files are detected.
 
 ## Features
 
@@ -122,7 +112,7 @@ A Windows PC is required to build the project.
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/RanggaCasper/Black-Android.git
+git clone https://github.com/UnknuwProjects/Black-Android.git
 cd Black-Android
 ```
 
