@@ -280,7 +280,7 @@ static void LogAdsLoad(uint32_t data, const char* type, int src) {
     static bool tagged = false;
     if (!tagged) {
         tagged = true;
-        DbgLog("build: dbg19 (clean + kick diagnosis: kick lines per 0.5 s, clip lines per clip change, only with NO WEAPON KICK on)\n");
+        DbgLog("build: dbg20 (kick holds on every lap of the clip; clean + kick diagnosis: kick lines per 0.5 s, clip lines per clip change, only with NO WEAPON KICK on)\n");
     }
     if (FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/ads_test.log", "a")) {
         std::fprintf(log, "aim in: data=%08X type=%s, %u lines, source=%s\n", unsigned(data), type,
@@ -943,7 +943,7 @@ static void AimPinRefresh() {
 static uint32_t g_kick_ac = 0;  // the player's animation controller, noted by sub_0017B130
 static bool g_fetch_active = false;
 static uint32_t g_fetch_clip = 0;
-static float g_fetch_real = 0, g_fetch_cap = 0;
+static float g_fetch_real = 0, g_fetch_cap = 0, g_fetch_len = 0;
 
 // DIAGNOSIS (dbg19, remove once the kick holds): one line per 0.5 s of fire while NO WEAPON KICK is on. calls = keyframe fetches of
 // the fire clip, swapped = those held at the cap, late = above the cap but the time was not the clip's own (not held),
@@ -977,7 +977,14 @@ X86_FUNC(sub_00098450) {
     uint32_t esp0 = ctx.esp;
     if (R32(esp0 + 4) != g_fetch_clip) return __imp__sub_00098450(ctx, base);
     float cur = G<float>(esp0 + 0x10);
-    bool swap = g_fetch_cap > 0 && std::fabs(cur - g_fetch_real) < 0.51f && cur > g_fetch_cap;
+    // the time the fetch gets is the clip's t14 wrapped by the clip's length once t14 passes it (the log: len 162, t14 183.3 -> 20.4,
+    // t14 334.6 -> 10.6): the same time whole laps apart. Held at the cap on every lap, or the kick comes back after the first one
+    bool own = std::fabs(cur - g_fetch_real) < 0.51f;
+    if (!own && g_fetch_len > 1.0f) {
+        float laps = std::floor((g_fetch_real - cur) / g_fetch_len + 0.5f);
+        own = laps >= 1 && std::fabs(g_fetch_real - cur - laps * g_fetch_len) < 0.51f;
+    }
+    bool swap = g_fetch_cap > 0 && own && cur > g_fetch_cap;
     g_dg_calls++;
     if (swap) g_dg_swapped++;
     else if (g_fetch_cap > 0 && cur > g_fetch_cap) {
@@ -1017,6 +1024,7 @@ X86_FUNC(sub_00097E00) {
     g_fetch_active = true;
     g_fetch_clip = clip;
     g_fetch_real = G<float>(clip + 0x14);
+    g_fetch_len = G<float>(clip + 0x1C);
     g_fetch_cap = cap;
     __imp__sub_00097E00(ctx, base);
     g_fetch_active = false;
