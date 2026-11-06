@@ -878,7 +878,6 @@ static bool AimingNow() {
 // The idle clip stands where it was when the aim came in. idle in ads_view.txt (10th number, optional): 0 steady, 1 the
 // game's. Left out: steady for the SPAS 12 and the Remington (as it was), the game's for the rest. At the G36C and the AKM
 // the game holds the idle clip itself at the aim (t14 0 in the log), so 0 changes nothing there: their sway is not this clip.
-// EXPERIMENT: +0x14 / +0x18 for the clip's time, see the "idle hold" lines of ads_test.log
 static bool IdleHoldNow() {
     uint32_t weapon = R32(Player() + kPlayerWeapon);
     if (!weapon || !AimingNow()) return false;
