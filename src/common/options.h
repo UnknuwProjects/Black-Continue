@@ -50,6 +50,9 @@ struct Options {
     uint32_t rapid_fire = 1;  // cheat: times the player's rate of fire, 1 the game's
     bool no_recoil = false;  // cheat: the player's shots do not kick the view
     bool steady_aim = true;  // the gun's idle sway is held still at the aim, every weapon (src/game/hooks.cpp); off: the game's own sway
+    uint32_t aim_view = 1;  // the aim's look: 0 ZOOM (the game's own, no move of the gun), 1 ADS (the gun moves to the middle, src/game/hooks.cpp)
+    bool no_kick = false;  // the fire clip's pose is held at its start: no kick animation, the shell casings still come (src/game/hooks.cpp)
+    uint32_t ads_custom = 0;  // the ADS rows: 0 the built in table (ads_view.txt as it was), 1 ADS_Custom.txt in SaveData
     uint32_t game_speed = 100;  // cheat: percent of the game's speed, menus and films keep theirs
     bool god_mode = false;  // cheat: no hit takes the player's health
     bool one_hit_kill = false;  // cheat: any hit of the player's bullets kills
