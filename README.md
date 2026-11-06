@@ -30,7 +30,7 @@ This is a native port, not an emulator.
 
 ## Installation
 
-1. Download and install the APK from the [Releases page]([https://github.com/RanggaCasper/Black-Android/releases](https://github.com/UnknuwProjects/Black-Continue/releases)).
+1. Download and install the APK from the [Releases page]([https://github.com/RanggaCasper/Black-Android/releases](https://github.com/UnknuwProjects/Black-Continue/releases).
 2. Launch **Black Android** and grant **All files access** when prompted. On Android 10, grant the storage permission instead.
 3. Copy the game files to one of these locations:
    - `/storage/emulated/0/Black`
