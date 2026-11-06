@@ -157,8 +157,7 @@ std::string Label(const std::string& key_name) {
 
 // ---- automatic suppressor: weapon+0x108 is 1 while the suppressor is on ----------------------------------------
 // Weapons whose table code is listed get it set once when they are in hand and idle. The default list is what the
-// tests proved (Glock, AK-47, Pistol, MP5, Walther 2000, Uzi, G36C, MAC-10, P90, M16); suppressor_codes.txt beside the log (codes separated by spaces, e.g. "GK1 AK1 MP1")
-// replaces it, to try other weapons.
+// tests proved (Glock, AK-47, Pistol, MP5, Walther 2000, Uzi, G36C, MAC-10, P90, M16).
 std::atomic<bool> g_auto_suppressor{false};  // the panel offers both versions of each weapon; true also forces it on pickups
 std::set<std::string> g_supp_codes;
 std::map<uint32_t, int> g_applied;  // weapon object -> type it was handled as
@@ -185,7 +184,7 @@ void DiagLog(const char* fmt, ...) {
         first = false;
         std::rename(path, "/storage/emulated/0/Black/SaveData/weapons_diag_prev.log");
     }
-    if (lines >= 500) return;  // a runaway probe cannot fill the storage
+    if (lines >= 400) return;  // a runaway line cannot fill the storage
     lines++;
     if (FILE* f = std::fopen(path, "a")) {
         std::fputs(line, f);
@@ -199,17 +198,6 @@ void LoadSuppressorCodes() {
     if (done) return;
     done = true;
     g_supp_codes = {"GK1", "AK1", "PST", "MP1", "SMG", "ASR", "SM3", "P90", "M16", "BNS"};  // checked in game; SNR (Walther 2000) has no suppressor to put on or take off
-    std::ifstream f("/storage/emulated/0/Black/SaveData/suppressor_codes.txt");
-    std::set<std::string> codes;
-    std::string tok;
-    while (f >> tok) {
-        for (char& c : tok) c = char(std::toupper(uint8_t(c)));
-        codes.insert(CodeOf(tok));
-    }
-    if (!codes.empty()) g_supp_codes = codes;
-    std::string all;
-    for (const std::string& c : g_supp_codes) all += c + " ";
-    DiagLog("weapons: auto suppressor for %s", all.c_str());
 }
 
 bool SuppSupportedCode(const std::string& code) {
@@ -247,7 +235,6 @@ std::atomic<bool> g_continue{false};
 void SetStatus(const std::string& text) {
     std::lock_guard<std::mutex> lock(g_lock);
     g_view.status = text;
-    DiagLog("weapons: %s", text.c_str());
 }
 
 std::string Lower(std::string s) {
@@ -552,7 +539,6 @@ void GrantSuppressor(int type) {
     uint8_t& owned = G<uint8_t>(kSuppOwned + uint32_t(type));
     if (owned == 1) return;
     owned = 1;
-    DiagLog("weapons: suppressor owned for type %d", type);
 }
 
 void DoFillMedkits() {
@@ -689,8 +675,6 @@ void SaveCheckpointFile(uint32_t s) {
         if (!f) return DiagLog("weapons: checkpoint file not written");
     }
     std::rename(tmp.c_str(), file.c_str());
-    DiagLog("weapons: checkpoint kept (section %d, difficulty %u, %u bytes)", int(R32(kCpSection)), unsigned(difficulty),
-            unsigned(d.size()));
 }
 
 // the kept checkpoint back into the game's memory, when this level is the one it was taken in; "" when done
@@ -733,7 +717,6 @@ std::string LoadCheckpointFile() {
     W32(kCpTime, time);
     W32(kCpMark, 1);
     G<uint8_t>(kCheckpointFlag) = 1;
-    DiagLog("weapons: checkpoint read from the file (section %d)", int(section));
     return "";
 }
 
@@ -781,7 +764,6 @@ void AutoSuppressor(const Level& l) {
     if (!g_supp_codes.count(code) || R32(w + kWeaponSuppressed)) return;
     W32(w + kWeaponSuppressed, 1);
     GrantSuppressor(type);
-    DiagLog("weapons: suppressor on for %s (weapon %08X)", code.c_str(), unsigned(w));
 }
 
 // the weapon whose suppressor was changed in hand went out; once the other one is in hand it is brought back
@@ -792,25 +774,6 @@ void SwapBack(const Level& l) {
     if (held != g_swap_back && (Slot(l, 0) == g_swap_back || Slot(l, 1) == g_swap_back))
         W32(l.inventory + kInvRequest, 2);
     g_swap_back = 0;
-}
-
-// notes why a level is not read: only when the world is playing and the level cannot be read, once per change
-void Heartbeat() {
-    static uint32_t last_state = 0xFFFFFFFF;
-    static int last_ok = -1;
-    uint32_t world = R32(kWorld);
-    uint32_t state = world ? R32(world + kWorldState) : 0xFFFFFFFE;
-    Level l;
-    int ok = ReadLevel(l) ? 1 : 0;
-    if (state == last_state && ok == last_ok) return;
-    last_state = state;
-    last_ok = ok;
-    if (world && !ok && state == kStatePlaying) {
-        uint32_t player = world + kWorldPlayer, inv = player + kPlayerInventory;
-        DiagLog("weapons: kind=%u owner=%08X (player %08X) slots=%08X manager=%08X", unsigned(R32(player + kPlayerKind)),
-             unsigned(R32(inv + kInvOwner)), unsigned(player), unsigned(R32(inv + kInvSlots)),
-             unsigned(R32(kWeaponManager)));
-    }
 }
 
 }  // namespace
@@ -840,7 +803,6 @@ void WeaponsTick(X86Context& ctx) {
     if (g_medkits.exchange(false)) DoFillMedkits();
     if (g_continue.exchange(false)) DoContinue(ctx);
     if (++tick % 10 == 0) Refresh();
-    Heartbeat();
     Level l;
     if (ReadLevel(l)) {
         AutoSuppressor(l);
