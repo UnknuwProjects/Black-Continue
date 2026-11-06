@@ -284,7 +284,7 @@ static void LoadAdsShifts(uint32_t data, const char* type) {
     static bool tagged = false;
     if (!tagged) {
         tagged = true;
-        DbgLog("build: dbg15b (PLAN D + OUT/OUTK pose output rules: node handlers T0-T25 wrapped: c12 per node, c13 per sample, hold by T<type> in bone_hold.txt; c10w c14 pose logs; dbg14 kept)\n");
+        DbgLog("build: dbg16 (PLAN D + c16 event log, EVT rule; OUT/OUTK pose output rules: node handlers T0-T25 wrapped: c12 per node, c13 per sample, hold by T<type> in bone_hold.txt; c10w c14 pose logs; dbg14 kept)\n");
     }
     std::ifstream f("/storage/emulated/0/Black/SaveData/ads_view.txt");
     std::string line;
@@ -1011,6 +1011,8 @@ static void LoadBoneHold() {
                        "# in one sample, * for all, or #ADDR,ADDR = node addresses from the c12 lines. Example: HVY T22 4 4 *\n"
                        "# dbg15b: FUNC = OUT: the pose output of the fire clip (32 bytes, 8 floats). ARG = float index 0..7, CAP = the value written there\n"
                        "# (HVY OUT 7 1 *). FUNC = OUTK: CAP = a factor, new = 1 + (value - 1) * CAP (HVY OUTK 7 0.5 *). IDX is not used.\n"
+                       "# dbg16: FUNC = EVT: the events of the fire clip are not delivered (ARG and CAP unused, write 0 0). IDX = * (all), event times\n"
+                       "# (1,7,13), or #ADDR = the name pointer or the argument block pointer from the c16 lines (HVY EVT 0 0 #83D6F670)\n"
                        "ALL 9BEB0 0 0 *\n", w);
             std::fclose(w);
         }
@@ -1030,6 +1032,7 @@ static void LoadBoneHold() {
         if (t.size() >= 5) {
             r.key = t[0];
             if (t[1][0] == 'T' || t[1][0] == 't') { r.type = std::atoi(t[1].c_str() + 1); r.func = 0; }   // dbg15: T0..T25 = node type
+            else if (t[1] == "EVT" || t[1] == "evt") { r.type = -4; r.func = 0; }   // dbg16: mute events, see sub_00097F80
             else if (t[1].size() >= 3 && (t[1].compare(0, 3, "OUT") == 0 || t[1].compare(0, 3, "out") == 0)) {   // dbg15b: OUT / OUTK, see ApplyOut
                 r.type = (t[1].size() > 3 && (t[1][3] == 'K' || t[1][3] == 'k')) ? -3 : -2;
                 r.func = 0;
@@ -1697,6 +1700,68 @@ static void ApplyOut(uint32_t dst) {
                 DbgLog("c15 %s t14=%.2f dst=%08X w%d %.4f -> %.4f\n", g_fetch_tag.c_str(), double(g_fetch_real), unsigned(dst), r.arg, double(before), double(v));
             }
         }
+}
+// dbg16: EVENTS. 9B420 walks the event list of a leaf (16 bytes each: time, name pointer, 3 flag bytes, argument block) and, when
+// the time window covers an event, calls 97F80(state, event). That only runs the game callback kept at 0x2CE700. It is logged
+// here (c16: time, the name text, the argument block and the text it points at). EVT rules mute an event the safe way: the word at
+// state+0x84, which 97F80 tests first, is held at 0 during the call and put back after it. Nothing is skipped.
+static bool StrOk(uint32_t p) { return (p >= 0x80000000u && p + 64 < 0x84000000u) || (p >= 0x10000u && p < 0x2FFF00u); }
+static std::string StrAt(uint32_t p) {
+    std::string o;
+    if (!StrOk(p)) return o;
+    for (int i = 0; i < 40; i++) {
+        uint8_t c = G<uint8_t>(p + i);
+        if (!c) break;
+        o += (c >= 32 && c < 127) ? char(c) : '?';
+    }
+    return o;
+}
+X86_EXTERN_FUNC(__imp__sub_00097F80);
+X86_FUNC(sub_00097F80) {
+    uint32_t e = ctx.esp;
+    uint32_t state = R32(e + 4), evt = R32(e + 8);
+    bool mute = false;
+    uint32_t saved = 0;
+    if (g_fetch_active && PtrOk2(state) && PtrOk2(evt)) {
+        float tm = G<float>(evt);
+        uint32_t w1 = R32(evt + 4), w2 = R32(evt + 8), w3 = R32(evt + 12);
+        static uint32_t cb_shown = 1;
+        static std::set<std::string> seen;
+        static int lines = 0, mlines = 0;
+        uint32_t cb = R32(0x2CE700);
+        if (cb != cb_shown) {
+            cb_shown = cb;
+            DbgLog("c16 event callback (2CE700) = %08X\n", unsigned(cb));
+        }
+        LoadBoneHold();
+        for (int pass = 0; pass < 2 && !mute; pass++)
+            for (const BoneRule& r : g_bone_rules)
+                if (r.type == -4 && r.key == (pass == 0 ? g_fetch_weapon : std::string("ALL")) &&
+                    (r.all || r.idx.count(int(tm + 0.5f)) || r.ptr.count(w1) || r.ptr.count(w3))) {
+                    mute = true;
+                    break;
+                }
+        char k[96];
+        std::snprintf(k, sizeof k, "%s#%d#%08X#%08X", g_fetch_tag.c_str(), int(tm + 0.5f), unsigned(w1), unsigned(w3));
+        if (lines < 600 && seen.insert(k).second) {
+            lines++;
+            uint32_t b[4] = {0, 0, 0, 0};
+            if (PtrOk2(w3)) for (int i = 0; i < 4; i++) b[i] = R32(w3 + 4 * i);
+            DbgLog("c16 %s s=%d t14=%.2f ev=%08X t=%.1f ret=%08X w1=%08X w2=%08X w3=%08X n1=\"%s\" blk=%08X %08X %08X %08X n3=\"%s\" mute=%d\n",
+                   g_fetch_tag.c_str(), g_c9_sample, double(g_fetch_real), unsigned(evt), double(tm), unsigned(R32(e)), unsigned(w1), unsigned(w2),
+                   unsigned(w3), StrAt(w1).c_str(), unsigned(b[0]), unsigned(b[1]), unsigned(b[2]), unsigned(b[3]), StrAt(b[3]).c_str(), mute ? 1 : 0);
+        }
+        if (mute && mlines < 12) {
+            mlines++;
+            DbgLog("c17 %s muted event t=%.1f w1=%08X w3=%08X at t14=%.2f\n", g_fetch_tag.c_str(), double(tm), unsigned(w1), unsigned(w3), double(g_fetch_real));
+        }
+        if (mute) {
+            saved = R32(state + 0x84);
+            W32(state + 0x84, 0);
+        }
+    }
+    __imp__sub_00097F80(ctx, base);
+    if (mute) W32(state + 0x84, saved);
 }
 X86_EXTERN_FUNC(__imp__sub_00091C20);
 X86_FUNC(sub_00091C20) {
