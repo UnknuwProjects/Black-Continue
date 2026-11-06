@@ -291,7 +291,7 @@ enum RowId { kRenderResolution, kMaxFps, kVsync, kFpsCounter, kAniso, kReloadBlu
              kCheckUpdates, kTouchSensitivity, kLeftDeadzone, kRightDeadzone, kLeftSensitivity, kRightSensitivity,
              kScreenFilter, kGyroInvertX, kGyroInvertY, kUnlockLevels, kUnlockBlackOps, kTouchSkin, kCredit, kBloom,
              kFog, kAntiAliasing, kHdr, kEsp, kAimbot, kTouchStick, kDynamicRes, kDynamicTarget, kDynamicMin,
-             kDynamicMax, kDynamicHold, kAutoUpdate, kInfiniteMedkits, kTouchFireLook, kTouchAim, kSteadyAim };
+             kDynamicMax, kDynamicHold, kAutoUpdate, kInfiniteMedkits, kTouchFireLook, kTouchAim, kSteadyAim, kAimView, kNoKick, kAdsCustom };
 
 using rows::Kind;
 using rows::Row;
@@ -368,6 +368,9 @@ constexpr Row kCheatRows[] = {
     {Kind::Value, kRapidFire, "RAPID FIRE"},
     {Kind::Value, kNoRecoil, "NO RECOIL"},
     {Kind::Value, kSteadyAim, "STEADY AIM"},
+    {Kind::Value, kAimView, "AIM VIEW"},
+    {Kind::Value, kNoKick, "NO WEAPON KICK (FIRE ANIM OFF)"},
+    {Kind::Value, kAdsCustom, "ADS MODE"},
     {Kind::Heading, -1, "PLAYER"},
     {Kind::Value, kGodMode, "GOD MODE"},
     {Kind::Value, kInfiniteMedkits, "INFINITE MEDKITS"},
@@ -452,6 +455,7 @@ bool* ToggleFlag(Settings& s, int id) {
         case kInfiniteAmmo: return &o.infinite_ammo;
         case kNoRecoil: return &o.no_recoil;
         case kSteadyAim: return &o.steady_aim;
+        case kNoKick: return &o.no_kick;
         case kGodMode: return &o.god_mode;
         case kInfiniteMedkits: return &o.infinite_medkits;
         case kOneHitKill: return &o.one_hit_kill;
@@ -566,6 +570,18 @@ bool StepCheatRow(int id, int step, char (&text)[64]) {
             if (o.rapid_fire <= 1) std::snprintf(text, sizeof(text), "OFF");
             else std::snprintf(text, sizeof(text), "%uX", o.rapid_fire);
             return true;
+        case kAimView: {
+            static constexpr uint32_t kValues[] = {0, 1};
+            static const char* const kNames[] = {"ZOOM", "ADS"};
+            std::snprintf(text, sizeof(text), "%s", kNames[StepTable(kValues, o.aim_view, step)]);
+            return true;
+        }
+        case kAdsCustom: {
+            static constexpr uint32_t kValues[] = {0, 1};
+            static const char* const kNames[] = {"DEFAULT", "CUSTOM"};
+            std::snprintf(text, sizeof(text), "%s", kNames[StepTable(kValues, o.ads_custom, step)]);
+            return true;
+        }
         case kGameSpeed:
             // 25% to 200% in steps of 25
             if (step) o.game_speed = uint32_t(StepRange(int(o.game_speed), 25, 200, 25, step));
@@ -773,6 +789,9 @@ void RestoreDefaults(int page) {
         o.rapid_fire = none.rapid_fire;
         o.no_recoil = none.no_recoil;
         o.steady_aim = none.steady_aim;
+        o.aim_view = none.aim_view;
+        o.no_kick = none.no_kick;
+        o.ads_custom = none.ads_custom;
         o.game_speed = none.game_speed;
         o.god_mode = none.god_mode;
         o.infinite_medkits = none.infinite_medkits;
@@ -806,6 +825,9 @@ void RestoreDefaults(int page) {
     o.rapid_fire = keep.rapid_fire;
     o.no_recoil = keep.no_recoil;
     o.steady_aim = keep.steady_aim;
+    o.aim_view = keep.aim_view;
+    o.no_kick = keep.no_kick;
+    o.ads_custom = keep.ads_custom;
     o.game_speed = keep.game_speed;
     o.god_mode = keep.god_mode;
     o.infinite_medkits = keep.infinite_medkits;
