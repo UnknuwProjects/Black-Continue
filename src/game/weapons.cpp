@@ -185,7 +185,7 @@ void DiagLog(const char* fmt, ...) {
         first = false;
         std::rename(path, "/storage/emulated/0/Black/SaveData/weapons_diag_prev.log");
     }
-    if (lines >= 3000) return;  // a runaway probe cannot fill the storage
+    if (lines >= 500) return;  // a runaway probe cannot fill the storage
     lines++;
     if (FILE* f = std::fopen(path, "a")) {
         std::fputs(line, f);
@@ -489,12 +489,6 @@ void Refresh() {
     weapons::View v;
     v.in_level = ReadLevel(l);
     if (v.in_level) {
-        static uint32_t dumped_manager;  // once a level: every type of the table, to see which ones are suppressed
-        if (l.manager != dumped_manager) {
-            dumped_manager = l.manager;
-            for (int t = 0; t < l.count; t++)
-                DiagLog("weapons: table %d = %s", t, Decode(EntryKey(l, t)).c_str());
-        }
         int slots = std::min<int>(G<uint8_t>(l.inventory + kInvSlotCount), 2);
         for (int t = 0; t < l.count; t++) {
             std::string name = Decode(EntryKey(l, t));
@@ -800,7 +794,7 @@ void SwapBack(const Level& l) {
     g_swap_back = 0;
 }
 
-// logs the level loader's step whenever it changes: shows that the tick runs and why a level is not read
+// notes why a level is not read: only when the world is playing and the level cannot be read, once per change
 void Heartbeat() {
     static uint32_t last_state = 0xFFFFFFFF;
     static int last_ok = -1;
@@ -811,7 +805,6 @@ void Heartbeat() {
     if (state == last_state && ok == last_ok) return;
     last_state = state;
     last_ok = ok;
-    DiagLog("weapons: tick world=%08X state=%X level=%d", unsigned(world), unsigned(state), ok);
     if (world && !ok && state == kStatePlaying) {
         uint32_t player = world + kWorldPlayer, inv = player + kPlayerInventory;
         DiagLog("weapons: kind=%u owner=%08X (player %08X) slots=%08X manager=%08X", unsigned(R32(player + kPlayerKind)),
