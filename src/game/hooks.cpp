@@ -284,7 +284,7 @@ static void LoadAdsShifts(uint32_t data, const char* type) {
     static bool tagged = false;
     if (!tagged) {
         tagged = true;
-        DbgLog("build: dbg15 (PLAN D: node handlers T0-T25 wrapped: c12 per node, c13 per sample, hold by T<type> in bone_hold.txt; c10w c14 pose logs; dbg14 kept)\n");
+        DbgLog("build: dbg15b (PLAN D + OUT/OUTK pose output rules: node handlers T0-T25 wrapped: c12 per node, c13 per sample, hold by T<type> in bone_hold.txt; c10w c14 pose logs; dbg14 kept)\n");
     }
     std::ifstream f("/storage/emulated/0/Black/SaveData/ads_view.txt");
     std::string line;
@@ -1009,6 +1009,8 @@ static void LoadBoneHold() {
                        "# PIN: ARG -1 (FUNC 9BBC0, IDX = decimal ids) or -2 (FUNC 9BBC0 or 92570, IDX = call numbers): CAP = t14 where the transform is captured and then held.\n"
                        "# dbg15: FUNC = T0..T25 holds the time of a NODE TYPE (ARG 4 = current time, 5 = previous). IDX = call numbers of that type\n"
                        "# in one sample, * for all, or #ADDR,ADDR = node addresses from the c12 lines. Example: HVY T22 4 4 *\n"
+                       "# dbg15b: FUNC = OUT: the pose output of the fire clip (32 bytes, 8 floats). ARG = float index 0..7, CAP = the value written there\n"
+                       "# (HVY OUT 7 1 *). FUNC = OUTK: CAP = a factor, new = 1 + (value - 1) * CAP (HVY OUTK 7 0.5 *). IDX is not used.\n"
                        "ALL 9BEB0 0 0 *\n", w);
             std::fclose(w);
         }
@@ -1028,6 +1030,10 @@ static void LoadBoneHold() {
         if (t.size() >= 5) {
             r.key = t[0];
             if (t[1][0] == 'T' || t[1][0] == 't') { r.type = std::atoi(t[1].c_str() + 1); r.func = 0; }   // dbg15: T0..T25 = node type
+            else if (t[1].size() >= 3 && (t[1].compare(0, 3, "OUT") == 0 || t[1].compare(0, 3, "out") == 0)) {   // dbg15b: OUT / OUTK, see ApplyOut
+                r.type = (t[1].size() > 3 && (t[1][3] == 'K' || t[1][3] == 'k')) ? -3 : -2;
+                r.func = 0;
+            }
             else r.func = uint32_t(std::strtoul(t[1].c_str(), nullptr, 16));
             r.arg = std::atoi(t[2].c_str());
             r.cap = float(std::atof(t[3].c_str()));
@@ -1669,19 +1675,48 @@ static void PoseSlotLog(int which, uint32_t dst) {
     for (int i = 0; i < 8; i++) { std::snprintf(b, sizeof b, " %.4f", double(G<float>(dst + 4 * i))); o += b; }
     DbgLog("c14 %s w=%d s=%d t14=%.2f dst=%08X out:%s\n", g_fetch_tag.c_str(), which, g_c9_sample, double(g_fetch_real), unsigned(dst), o.c_str());
 }
+// dbg15b: the pose of the fire clip is ONE transform (key id 80): only its last float (index 7) moves, 1.0 -> 1.029 -> 1.0.
+// Written back after the game made it (nothing is skipped; the slot is read by 9BE70 afterwards). The belt, bolt and shells
+// are events of the same leaf and are not touched.
+static void ApplyOut(uint32_t dst) {
+    if (!g_fetch_active || !PtrOk2(dst)) return;
+    LoadBoneHold();
+    bool done = false;
+    for (int pass = 0; pass < 2 && !done; pass++)
+        for (const BoneRule& r : g_bone_rules) {
+            if ((r.type != -2 && r.type != -3) || r.arg < 0 || r.arg > 7 || r.key != (pass == 0 ? g_fetch_weapon : std::string("ALL"))) continue;
+            float& v = G<float>(dst + 4 * r.arg);
+            float before = v;
+            if (!std::isfinite(before)) continue;
+            v = r.type == -2 ? r.cap : 1.0f + (before - 1.0f) * r.cap;
+            done = true;
+            static std::map<std::string, int> shown;
+            int& sh = shown[g_fetch_tag];
+            if (sh < 6) {
+                sh++;
+                DbgLog("c15 %s t14=%.2f dst=%08X w%d %.4f -> %.4f\n", g_fetch_tag.c_str(), double(g_fetch_real), unsigned(dst), r.arg, double(before), double(v));
+            }
+        }
+}
 X86_EXTERN_FUNC(__imp__sub_00091C20);
 X86_FUNC(sub_00091C20) {
     uint32_t esp0 = ctx.esp;
     uint32_t ret = R32(esp0), dst = R32(esp0 + 4);
     __imp__sub_00091C20(ctx, base);
-    if (ret == 0x9C03D) PoseSlotLog(1, dst);
+    if (ret == 0x9C03D) {
+        PoseSlotLog(1, dst);
+        ApplyOut(dst);
+    }
 }
 X86_EXTERN_FUNC(__imp__sub_00092290);
 X86_FUNC(sub_00092290) {
     uint32_t esp0 = ctx.esp;
     uint32_t ret = R32(esp0), dst = R32(esp0 + 4);
     __imp__sub_00092290(ctx, base);
-    if (ret == 0x9C099) PoseSlotLog(2, dst);
+    if (ret == 0x9C099) {
+        PoseSlotLog(2, dst);
+        ApplyOut(dst);
+    }
 }
 
 X86_EXTERN_FUNC(__imp__sub_00098450);
