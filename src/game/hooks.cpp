@@ -280,7 +280,7 @@ static void LogAdsLoad(uint32_t data, const char* type, int src) {
     static bool tagged = false;
     if (!tagged) {
         tagged = true;
-        DbgLog("build: dbg18c (clean: menu AIM VIEW / NO WEAPON KICK / ADS MODE, steady aim, no experiment hooks)\n");
+        DbgLog("build: dbg19 (clean + kick diagnosis: "kick" lines per 0.5 s, "clip" lines per clip change, only with NO WEAPON KICK on)\n");
     }
     if (FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/ads_test.log", "a")) {
         std::fprintf(log, "aim in: data=%08X type=%s, %u lines, source=%s\n", unsigned(data), type,
@@ -945,6 +945,32 @@ static bool g_fetch_active = false;
 static uint32_t g_fetch_clip = 0;
 static float g_fetch_real = 0, g_fetch_cap = 0;
 
+// DIAGNOSIS (dbg19, remove once the kick holds): one line per 0.5 s of fire while NO WEAPON KICK is on. calls = keyframe fetches of
+// the fire clip, swapped = those held at the cap, late = above the cap but the time was not the clip's own (not held),
+// nofire = sampler calls of the player's controller clip whose name is not in the fire list (name shown), noac = sampler calls
+// while the controller's clip is another than the sampled one
+static int g_dg_calls = 0, g_dg_swapped = 0, g_dg_late = 0, g_dg_samples = 0, g_dg_fire = 0, g_dg_nofire = 0, g_dg_noac = 0;
+static float g_dg_t14 = 0, g_dg_cur = 0, g_dg_late_cur = 0, g_dg_late_real = 0;
+static std::string g_dg_name = "-", g_dg_nofire_name = "-";
+static long g_dg_ms = 0;
+static int g_dg_lines = 0;
+static void DiagSummary(float cap) {
+    long now = DbgMs();
+    if (now - g_dg_ms < 500) return;
+    g_dg_ms = now;
+    if (!g_dg_samples || g_dg_lines >= 400) {
+        g_dg_samples = g_dg_fire = g_dg_nofire = g_dg_noac = g_dg_calls = g_dg_swapped = g_dg_late = 0;
+        return;
+    }
+    g_dg_lines++;
+    uint32_t w = R32(Player() + kPlayerWeapon);
+    const char* wn = w ? TableName(R32(w + kWeaponData)) : nullptr;
+    DbgLog("kick ms=%ld weapon=%s cap=%.2f clip=%s t14=%.2f samples=%d fire=%d nofire=%d(%s) noac=%d calls=%d swapped=%d late=%d(cur=%.2f real=%.2f)\n",
+           now, wn ? wn : "-", cap, g_dg_name.c_str(), g_dg_t14, g_dg_samples, g_dg_fire, g_dg_nofire, g_dg_nofire_name.c_str(),
+           g_dg_noac, g_dg_calls, g_dg_swapped, g_dg_late, g_dg_late_cur, g_dg_late_real);
+    g_dg_samples = g_dg_fire = g_dg_nofire = g_dg_noac = g_dg_calls = g_dg_swapped = g_dg_late = 0;
+}
+
 X86_EXTERN_FUNC(__imp__sub_00098450);
 X86_FUNC(sub_00098450) {
     if (!g_fetch_active) return __imp__sub_00098450(ctx, base);
@@ -952,6 +978,13 @@ X86_FUNC(sub_00098450) {
     if (R32(esp0 + 4) != g_fetch_clip) return __imp__sub_00098450(ctx, base);
     float cur = G<float>(esp0 + 0x10);
     bool swap = g_fetch_cap > 0 && std::fabs(cur - g_fetch_real) < 0.51f && cur > g_fetch_cap;
+    g_dg_calls++;
+    if (swap) g_dg_swapped++;
+    else if (g_fetch_cap > 0 && cur > g_fetch_cap) {
+        g_dg_late++;
+        g_dg_late_cur = cur;
+        g_dg_late_real = g_fetch_real;
+    }
     if (swap) G<float>(esp0 + 0x10) = g_fetch_cap;
     __imp__sub_00098450(ctx, base);
     if (swap) G<float>(esp0 + 0x10) = cur;
@@ -962,9 +995,24 @@ X86_FUNC(sub_00097E00) {
     uint32_t clip = R32(ctx.esp + 4);
     uint32_t ac = g_kick_ac;
     AimPinRefresh();
-    bool fire = clip && ac && R32(ac + kAnimClip) == clip && R32(ac + kAnimOwner) == Player() &&
-                IsFireClip(ReadCString(ac + kAnimName, 13));
+    bool mine = clip && ac && R32(ac + kAnimClip) == clip && R32(ac + kAnimOwner) == Player();
+    std::string name = mine ? ReadCString(ac + kAnimName, 13) : std::string();
+    bool fire = mine && IsFireClip(name);
     float cap = fire ? RecoilCap() : 0.0f;  // 0: the pose is the game's own
+    if (game::Opt().no_kick) {
+        if (fire) {
+            g_dg_samples++;
+            g_dg_fire++;
+            g_dg_name = name;
+            g_dg_t14 = G<float>(clip + 0x14);
+        } else if (mine) {
+            g_dg_nofire++;
+            g_dg_nofire_name = name;
+        } else if (clip && ac && R32(ac + kAnimOwner) == Player() && IsFireClip(ReadCString(ac + kAnimName, 13))) {
+            g_dg_noac++;   // the controller stands on a fire clip, the sampler is called with another one
+        }
+        if (fire || g_dg_samples) DiagSummary(cap);
+    }
     if (cap <= 0) return __imp__sub_00097E00(ctx, base);
     g_fetch_active = true;
     g_fetch_clip = clip;
@@ -989,6 +1037,20 @@ X86_FUNC(sub_0017B130) {
     {
         uint32_t now_clip = R32(ac + kAnimClip);
         std::string clip_name = ReadCString(ac + kAnimName, 13);
+        if (game::Opt().no_kick) {   // DIAGNOSIS (dbg19): every change of the player's clip name, to see what plays when the kick returns
+            static std::string last_name;
+            static int change_lines = 0;
+            if (clip_name != last_name && change_lines < 300) {
+                change_lines++;
+                last_name = clip_name;
+                uint32_t w = R32(Player() + kPlayerWeapon);
+                const char* wn = w ? TableName(R32(w + kWeaponData)) : nullptr;
+                DbgLog("clip ms=%ld %s ac=%08X weapon=%s state=%u fire=%d slot=%d t14=%.2f len=%.1f\n", DbgMs(), clip_name.c_str(), unsigned(ac),
+                       wn ? wn : "-", w ? R32(w + kWeaponState) : 0u, int(now_clip && IsFireClip(clip_name)),
+                       now_clip ? int(G<int16_t>(now_clip + kAnimClipFadeSlot)) : -1, now_clip ? G<float>(now_clip + 0x14) : 0.f,
+                       now_clip ? G<float>(now_clip + 0x1C) : 0.f);
+            }
+        }
         {   // STEADY AIM: the idle clip (SPAS 12 / Remington) and the aim clip (G36C / AKM) stand still at the aim
             bool idle_name = clip_name.size() >= 5 && clip_name.compare(clip_name.size() - 5, 5, "S_001") == 0;
             bool aim_name = clip_name.size() >= 5 && clip_name.compare(clip_name.size() - 5, 5, "S_190") == 0;
