@@ -280,7 +280,7 @@ static void LogAdsLoad(uint32_t data, const char* type, int src) {
     static bool tagged = false;
     if (!tagged) {
         tagged = true;
-        DbgLog("build: dbg19 (clean + kick diagnosis: "kick" lines per 0.5 s, "clip" lines per clip change, only with NO WEAPON KICK on)\n");
+        DbgLog("build: dbg19 (clean + kick diagnosis: kick lines per 0.5 s, clip lines per clip change, only with NO WEAPON KICK on)\n");
     }
     if (FILE* log = std::fopen("/storage/emulated/0/Black/SaveData/ads_test.log", "a")) {
         std::fprintf(log, "aim in: data=%08X type=%s, %u lines, source=%s\n", unsigned(data), type,
