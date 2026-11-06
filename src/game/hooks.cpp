@@ -284,7 +284,7 @@ static void LoadAdsShifts(uint32_t data, const char* type) {
     static bool tagged = false;
     if (!tagged) {
         tagged = true;
-        DbgLog("build: dbg16 (PLAN D + c16 event log, EVT rule; OUT/OUTK pose output rules: node handlers T0-T25 wrapped: c12 per node, c13 per sample, hold by T<type> in bone_hold.txt; c10w c14 pose logs; dbg14 kept)\n");
+        DbgLog("build: dbg17 (PLAN D + c18 other clips, c19 controllers, CLP rule; c16 event log, EVT rule; OUT/OUTK pose output rules: node handlers T0-T25 wrapped: c12 per node, c13 per sample, hold by T<type> in bone_hold.txt; c10w c14 pose logs; dbg14 kept)\n");
     }
     std::ifstream f("/storage/emulated/0/Black/SaveData/ads_view.txt");
     std::string line;
@@ -1013,6 +1013,8 @@ static void LoadBoneHold() {
                        "# (HVY OUT 7 1 *). FUNC = OUTK: CAP = a factor, new = 1 + (value - 1) * CAP (HVY OUTK 7 0.5 *). IDX is not used.\n"
                        "# dbg16: FUNC = EVT: the events of the fire clip are not delivered (ARG and CAP unused, write 0 0). IDX = * (all), event times\n"
                        "# (1,7,13), or #ADDR = the name pointer or the argument block pointer from the c16 lines (HVY EVT 0 0 #83D6F670)\n"
+                       "# dbg17: FUNC = CLP: the OTHER clips sampled while firing (c18 lines, id=N). CAP = the time they are sampled at (held, the game keeps its own\n"
+                       "# time). IDX = ids from the c18 lines (same game run only) or * for all of them (HVY CLP 0 4 3)\n"
                        "ALL 9BEB0 0 0 *\n", w);
             std::fclose(w);
         }
@@ -1033,6 +1035,7 @@ static void LoadBoneHold() {
             r.key = t[0];
             if (t[1][0] == 'T' || t[1][0] == 't') { r.type = std::atoi(t[1].c_str() + 1); r.func = 0; }   // dbg15: T0..T25 = node type
             else if (t[1] == "EVT" || t[1] == "evt") { r.type = -4; r.func = 0; }   // dbg16: mute events, see sub_00097F80
+            else if (t[1] == "CLP" || t[1] == "clp") { r.type = -5; r.func = 0; }   // dbg17: hold the time of other clips, see OtherClipEnter
             else if (t[1].size() >= 3 && (t[1].compare(0, 3, "OUT") == 0 || t[1].compare(0, 3, "out") == 0)) {   // dbg15b: OUT / OUTK, see ApplyOut
                 r.type = (t[1].size() > 3 && (t[1][3] == 'K' || t[1][3] == 'k')) ? -3 : -2;
                 r.func = 0;
@@ -1820,13 +1823,55 @@ X86_FUNC(sub_00098450) {
 }
 
 X86_EXTERN_FUNC(__imp__sub_00097E00);
+// dbg17: THE OTHER CLIPS. Only the player's fire clip was watched until now. Every other clip the sampler runs within 0.8 s of a fire
+// sample is logged here (c18: id by first sight, the clip's first 8 words, the caller; later lines show its time moving), and the
+// controllers updated in that window are listed by sub_0017B130 (c19). CLP rules hold the time field of a clip (clip + 0x14) at CAP
+// during its sampling only; the value is put back right after, so the game's own timeline is untouched.
+static long g_last_fire_ms = -1000000;
+static std::map<uint32_t, int> g_oc_id, g_oc_n;
+static bool OtherClipEnter(uint32_t clip, uint32_t ret, float& saved) {
+    if (!clip || !PtrOk2(clip) || DbgMs() - g_last_fire_ms > 800) return false;
+    auto it = g_oc_id.find(clip);
+    if (it == g_oc_id.end()) it = g_oc_id.emplace(clip, int(g_oc_id.size())).first;
+    int id = it->second, n = ++g_oc_n[clip];
+    static int lines = 0;
+    bool show = n == 1 || n == 2 || n == 3 || n == 10 || n == 30 || n == 60 || n == 120 || n == 240;
+    if (show && lines < 700) {
+        lines++;
+        uint32_t w[8];
+        for (int i = 0; i < 8; i++) w[i] = R32(clip + 4 * i);
+        DbgLog("c18 id=%d n=%d clip=%08X t=%.2f len=%.1f ret=%08X w: %08X %08X %08X %08X %08X %08X %08X %08X weapon=%s\n", id, n, unsigned(clip),
+               double(G<float>(clip + 0x14)), double(G<float>(clip + 0x1C)), unsigned(ret), unsigned(w[0]), unsigned(w[1]), unsigned(w[2]),
+               unsigned(w[3]), unsigned(w[4]), unsigned(w[5]), unsigned(w[6]), unsigned(w[7]), g_fetch_weapon.c_str());
+    }
+    LoadBoneHold();
+    for (int pass = 0; pass < 2; pass++)
+        for (const BoneRule& r : g_bone_rules)
+            if (r.type == -5 && r.cap > 0 && r.key == (pass == 0 ? g_fetch_weapon : std::string("ALL")) && (r.all || r.idx.count(id))) {
+                float t = G<float>(clip + 0x14);
+                if (std::isfinite(t) && t > r.cap && t < 100000.0f) {
+                    saved = t;
+                    G<float>(clip + 0x14) = r.cap;
+                    return true;
+                }
+                return false;
+            }
+    return false;
+}
 X86_FUNC(sub_00097E00) {
     uint32_t clip = R32(ctx.esp + 4);
     uint32_t ac = g_kick_ac;
     AimPinRefresh();
     bool fire = clip && ac && R32(ac + kAnimClip) == clip && R32(ac + kAnimOwner) == Player() &&
                 IsFireClip(ReadCString(ac + kAnimName, 13));
-    if (!fire) return __imp__sub_00097E00(ctx, base);
+    if (!fire) {
+        float held = 0;
+        bool hold = OtherClipEnter(clip, R32(ctx.esp), held);
+        __imp__sub_00097E00(ctx, base);
+        if (hold) G<float>(clip + 0x14) = held;
+        return;
+    }
+    g_last_fire_ms = DbgMs();
     float cap = RecoilCap();  // 0: the pose is the game's own, the fetch is only watched for the tree file
     {
         uint32_t w0 = R32(Player() + kPlayerWeapon);
@@ -1912,6 +1957,20 @@ X86_FUNC(sub_00097E00) {
 X86_EXTERN_FUNC(__imp__sub_0017B130);
 X86_FUNC(sub_0017B130) {
     uint32_t ac = R32(ctx.esp + 4);
+    {   // dbg17: the controllers updated within 0.8 s of a fire sample (c19), once per controller and clip name
+        static std::set<std::string> seenc;
+        static int clines = 0;
+        if (clines < 300 && PtrOk2(ac) && DbgMs() - g_last_fire_ms < 800) {
+            std::string nm = ReadCString(ac + kAnimName, 13);
+            char k[80];
+            std::snprintf(k, sizeof k, "%08X#%s", unsigned(ac), nm.c_str());
+            if (seenc.insert(k).second) {
+                clines++;
+                DbgLog("c19 ac=%08X owner=%08X%s clip=%08X name=\"%s\"\n", unsigned(ac), unsigned(R32(ac + kAnimOwner)),
+                       R32(ac + kAnimOwner) == Player() ? "(player)" : "", unsigned(R32(ac + kAnimClip)), nm.c_str());
+            }
+        }
+    }
     uint32_t from = R32(ac + kAnimFrom);
     uint32_t clip = R32(ac + kAnimClip);
     if (R32(ac + kAnimOwner) != Player() || !clip) return __imp__sub_0017B130(ctx, base);
