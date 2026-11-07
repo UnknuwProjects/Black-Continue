@@ -23,6 +23,7 @@ View Current();      // any thread
 void Give(int type);  // any thread: done on the game thread's next tick
 void FillAmmo();      // any thread: both slots' ammunition to full
 void FillMedkits();    // any thread: the medkits to the game's maximum
+void FillGrenades();   // any thread: the grenades to the game's maximum, 9
 void ContinueCheckpoint();  // any thread: the game's retry from the last checkpoint, on the game thread's next tick
 
 }  // namespace weapons
