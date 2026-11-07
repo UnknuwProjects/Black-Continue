@@ -111,6 +111,8 @@ constexpr uint32_t kDistances[] = {1, 2, 4, 8};
 const char* const kDistanceNames[] = {"GAME DEFAULT", "2x", "4x", "8x"};
 constexpr uint32_t kAntiAliasings[] = {0, 1, 2};
 const char* const kAntiAliasingNames[] = {"OFF", "FXAA", "SSAA 2X"};
+constexpr uint32_t kMaliFixes[] = {0, 1, 2, 3, 4};
+const char* const kMaliFixNames[] = {"OFF", "AUTO", "SHADER FIX", "NO GLOW", "SHADER FIX + NO GLOW"};
 constexpr uint32_t kFmvScales[] = {0, 1};
 const char* const kFmvScaleNames[] = {"FILL", "4:3"};
 constexpr uint32_t kScreenFilters[] = {0, 1, 2, 3, 4, 5, 6, 7, 8};
@@ -291,7 +293,7 @@ enum RowId { kRenderResolution, kMaxFps, kVsync, kFpsCounter, kAniso, kReloadBlu
              kCheckUpdates, kTouchSensitivity, kLeftDeadzone, kRightDeadzone, kLeftSensitivity, kRightSensitivity,
              kScreenFilter, kGyroInvertX, kGyroInvertY, kUnlockLevels, kUnlockBlackOps, kTouchSkin, kCredit, kBloom,
              kFog, kAntiAliasing, kHdr, kEsp, kAimbot, kTouchStick, kDynamicRes, kDynamicTarget, kDynamicMin,
-             kDynamicMax, kDynamicHold, kAutoUpdate, kInfiniteMedkits, kTouchFireLook, kTouchAim, kSteadyAim, kAimView, kNoKick, kAdsCustom };
+             kDynamicMax, kDynamicHold, kAutoUpdate, kInfiniteMedkits, kTouchFireLook, kTouchAim, kSteadyAim, kAimView, kNoKick, kAdsCustom, kMaliFix };
 
 using rows::Kind;
 using rows::Row;
@@ -321,6 +323,7 @@ constexpr Row kGraphicsRows[] = {
     {Kind::Value, kFog, "FOG"},
     {Kind::Value, kAntiAliasing, "ANTI-ALIASING"},
     {Kind::Value, kHdr, "HDR"},
+    {Kind::Value, kMaliFix, "MALI FIX (RESTART)"},
 };
 
 constexpr Row kTouchRows[] = {
@@ -554,6 +557,9 @@ bool StepGraphicsRow(int id, int step, Settings& s, char (&text)[64]) {
             return true;
         case kDrawDistance:
             std::snprintf(text, sizeof(text), "%s", kDistanceNames[StepTable(kDistances, o.draw_distance, step)]);
+            return true;
+        case kMaliFix:
+            std::snprintf(text, sizeof(text), "%s", kMaliFixNames[StepTable(kMaliFixes, o.mali_fix, step)]);
             return true;
         default:
             return false;
@@ -1022,6 +1028,7 @@ void DrawWeapons() {
     if (ImGui::Button(Ui("FILL AMMUNITION").c_str(), ImVec2(w, 0))) weapons::FillAmmo();
     ImGui::SameLine();
     if (ImGui::Button(Ui("FILL MEDKITS").c_str(), ImVec2(w, 0))) weapons::FillMedkits();
+    if (ImGui::Button(Ui("FILL GRENADES").c_str(), ImVec2(w, 0))) weapons::FillGrenades();
     Section("CHECKPOINT");
     if (ImGui::Button(Ui("LOAD CHECKPOINT").c_str(), ImVec2(w, 0))) weapons::ContinueCheckpoint();
     if (!v.status.empty()) {
