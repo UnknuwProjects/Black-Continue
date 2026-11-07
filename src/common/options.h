@@ -22,6 +22,9 @@ struct Options {
     bool bloom = true;  // the glow added over bright parts of the frame (native/vulkan.cpp)
     bool fog = true;
     uint32_t anti_aliasing = 0;  // 0 off, 1 FXAA as the frame goes onto the screen, 2 SSAA: twice the resolution
+    // ARM Mali GPUs (MediaTek too) draw the glow passes saturated: 0 off, 1 auto (the shader fix on Mali only),
+    // 2 shader fix, 3 glow passes dropped, 4 both; the shader part is read when the renderer starts (native/vulkan.cpp)
+    uint32_t mali_fix = 1;
     bool hdr = false;  // a tone map that brings back the colours the console's overbright look burns out
     uint32_t draw_distance = 1;  // times the game's LOD and draw distances
     // the render resolution follows the frame rate (native/dynamic_resolution.cpp): down when it falls under the
