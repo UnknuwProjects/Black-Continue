@@ -23,7 +23,7 @@ struct Options {
     bool fog = true;
     uint32_t anti_aliasing = 0;  // 0 off, 1 FXAA as the frame goes onto the screen, 2 SSAA: twice the resolution
     // ARM Mali GPUs (MediaTek too) draw the glow passes saturated: 0 off, 1 auto (the shader fix on Mali only),
-    // 2 shader fix, 3 glow passes dropped, 4 both; the shader part is read when the renderer starts (native/vulkan.cpp)
+    // 2 shader fix, 3 glow passes dropped, 4 both; a change applies at once (native/vulkan.cpp)
     uint32_t mali_fix = 1;
     bool hdr = false;  // a tone map that brings back the colours the console's overbright look burns out
     uint32_t draw_distance = 1;  // times the game's LOD and draw distances
@@ -66,8 +66,9 @@ struct Options {
     bool esp = false;  // cheat: a line from the bottom of the screen and a box to each living enemy
     bool aimbot = false;  // cheat, AUTO HEADSHOT: aiming in turns the view to the head of the enemy nearest the crosshair
     uint32_t aim_assist = 0;  // cheat: 0 off, 1 to 3 a pull of the view to an enemy near the crosshair while firing or aiming
+    uint32_t head_height = 90;  // percent of the ESP box height: where AUTO HEADSHOT turns the view to
+    uint32_t esp_label = 0;  // the ESP's plate over each enemy, drawn by ImGui: 0 off, 1 health, 2 distance, 3 both
     bool esp_health = true;  // the ESP's health bar over each enemy
-    bool ignore_allies = true;  // the ESP and the aim cheats take only the characters an AI drives (src/game/esp.cpp)
     uint32_t esp_height = 180;  // centimetres: the ESP box's height, and what the head and body points are taken from
     uint32_t esp_on_color = 0x3CFF3C;   // 0xRRGGBB, the lines and boxes of the enemies in the view
     uint32_t esp_off_color = 0xFF3C3C;  // the arrows to the enemies out of it
