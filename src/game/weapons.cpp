@@ -100,6 +100,8 @@ constexpr uint32_t kPickupTable = 0x5844;      // its pickups, 0x160 bytes each:
 constexpr int kAmmoTypes = 10;
 constexpr uint32_t kPlayerMedkits = 0x8E1;  // byte in the player: the medkits held (found by the pickup tracker), the game holds 3
 constexpr int kMedkitMax = 3;
+constexpr uint32_t kPlayerGrenades = 0x286;  // uint16 in the player (src/game/cheats.cpp)
+constexpr int kGrenadeMax = 9;
 constexpr uint32_t kAmmoMax = 999;
 // weapon and its data
 constexpr uint32_t kWeaponType = 0;  // byte: index in the table
@@ -230,6 +232,7 @@ weapons::View g_view;
 std::atomic<int> g_give{-1};
 std::atomic<bool> g_fill{false};
 std::atomic<bool> g_medkits{false};
+std::atomic<bool> g_grenades{false};
 std::atomic<bool> g_continue{false};
 
 void SetStatus(const std::string& text) {
@@ -550,6 +553,15 @@ void DoFillMedkits() {
     SetStatus("Medkits filled (" + std::to_string(kMedkitMax) + "/" + std::to_string(kMedkitMax) + ")");
 }
 
+void DoFillGrenades() {
+    Level l;
+    if (!ReadLevel(l)) return SetStatus("Only during a level");
+    uint16_t& n = G<uint16_t>(l.player + kPlayerGrenades);
+    if (n >= kGrenadeMax) return SetStatus("Grenades already full (" + std::to_string(kGrenadeMax) + ")");
+    n = uint16_t(kGrenadeMax);
+    SetStatus("Grenades filled (" + std::to_string(kGrenadeMax) + "/" + std::to_string(kGrenadeMax) + ")");
+}
+
 void DoGive(X86Context& ctx, int code) {
     Level l;
     if (!ReadLevel(l)) return SetStatus("Only during a level");
@@ -789,6 +801,7 @@ void Give(int type) { g_give = type; }
 
 void FillAmmo() { g_fill = true; }
 void FillMedkits() { g_medkits = true; }
+void FillGrenades() { g_grenades = true; }
 void ContinueCheckpoint() { g_continue = true; }
 
 void SetAutoSuppressor(bool on) { g_auto_suppressor = on; }  // add its declaration to game/weapons.h
@@ -801,6 +814,7 @@ void WeaponsTick(X86Context& ctx) {
     if (int type = g_give.exchange(-1); type >= 0) DoGive(ctx, type);
     if (g_fill.exchange(false)) DoFill();
     if (g_medkits.exchange(false)) DoFillMedkits();
+    if (g_grenades.exchange(false)) DoFillGrenades();
     if (g_continue.exchange(false)) DoContinue(ctx);
     if (++tick % 10 == 0) Refresh();
     Level l;
