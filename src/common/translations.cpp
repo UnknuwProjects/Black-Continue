@@ -118,8 +118,9 @@ constexpr Entry kEntries[] = {
     {"AUTO HEADSHOT (WHILE AIMING IN)", {u"Tir à la tête auto (en visant)", u"Auto-Kopfschuss (beim Zielen)", u"Colpo alla testa auto (mirando)", u"Disparo a la cabeza auto (al apuntar)", u"Tembak kepala otomatis (saat membidik)"}},
     {"AIM ASSIST", {u"Aide à la visée", u"Zielhilfe", u"Assistenza alla mira", u"Asistencia de puntería", u"Bantuan bidik"}},
     {"ESP HEALTH BARS", {{}, {}, {}, {}, u"Bar nyawa ESP"}},
+    {"ESP LABEL", {{}, {}, {}, {}, u"Label ESP"}},
     {"ESP BOX HEIGHT", {{}, {}, {}, {}, u"Tinggi kotak ESP"}},
-    {"IGNORE ALLIES", {{}, {}, {}, {}, u"Abaikan teman"}},
+    {"HEADSHOT HEIGHT", {{}, {}, {}, {}, u"Tinggi headshot"}},
     {"ESP IN VIEW RED", {{}, {}, {}, {}, u"ESP di layar: merah"}},
     {"ESP IN VIEW GREEN", {{}, {}, {}, {}, u"ESP di layar: hijau"}},
     {"ESP IN VIEW BLUE", {{}, {}, {}, {}, u"ESP di layar: biru"}},
@@ -247,7 +248,7 @@ constexpr Entry kEntries[] = {
     {"SUPPLIES", {{}, {}, {}, {}, u"Persediaan"}},
     {"FILL MEDKITS", {{}, {}, {}, {}, u"Isi P3K"}},
     {"FILL GRENADES", {{}, {}, {}, {}, u"Isi granat"}},
-    {"MALI FIX (RESTART)", {{}, {}, {}, {}, u"Perbaikan Mali (restart)"}},
+    {"MALI FIX", {{}, {}, {}, {}, u"Perbaikan Mali"}},
     {"LOAD CHECKPOINT", {{}, {}, {}, {}, u"Muat checkpoint"}},
 
     // the panel's status lines
