@@ -236,6 +236,8 @@ constexpr Entry kEntries[] = {
     {"* SILENCED SOUND ONLY", {{}, {}, {}, {}, u"* Hanya suara diredam"}},
     {"SUPPLIES", {{}, {}, {}, {}, u"Persediaan"}},
     {"FILL MEDKITS", {{}, {}, {}, {}, u"Isi P3K"}},
+    {"FILL GRENADES", {{}, {}, {}, {}, u"Isi granat"}},
+    {"MALI FIX (RESTART)", {{}, {}, {}, {}, u"Perbaikan Mali (restart)"}},
     {"LOAD CHECKPOINT", {{}, {}, {}, {}, u"Muat checkpoint"}},
 
     // the panel's status lines
