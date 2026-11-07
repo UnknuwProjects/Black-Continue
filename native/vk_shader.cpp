@@ -19,7 +19,9 @@ namespace {
 std::filesystem::path g_dir;
 std::mutex g_lock;
 // bumped when the translation below changes, so older cached modules are not used
-constexpr uint32_t kCacheVersion = 2;
+constexpr uint32_t kCacheVersion = 3;
+// mali: let glslang's optimizer inline the helpers that take a texture or sampler, so none goes through a function variable
+bool g_inline = false;
 
 struct Param {
     std::string type, name;
@@ -103,7 +105,7 @@ std::string Adapt(const std::string& hlsl) {
 
 std::filesystem::path CachePath(uint64_t hash) {
     char name[40];
-    std::snprintf(name, sizeof(name), "%016llx_%u.spv", (unsigned long long)hash, kCacheVersion);
+    std::snprintf(name, sizeof(name), "%016llx_%u%s.spv", (unsigned long long)hash, kCacheVersion, g_inline ? "i" : "");
     return g_dir / name;
 }
 
@@ -133,6 +135,8 @@ void Store(uint64_t hash, const std::vector<uint32_t>& spirv) {
 
 }  // namespace
 
+void SetInline(bool on) { g_inline = on; }
+
 void Init(const std::filesystem::path& cache_dir) {
     std::lock_guard lock(g_lock);
     glslang::InitializeProcess();
@@ -146,6 +150,14 @@ bool Compile(const std::string& hlsl, const char* entry, Stage stage, uint64_t h
     std::lock_guard lock(g_lock);
     EShLanguage lang = stage == Stage::Vertex ? EShLangVertex : EShLangFragment;
     std::string text = Adapt(hlsl);
+    // diagnosis: a helper still taking a texture or sampler after Specialize is what Mali gets wrong
+    {
+        static const std::regex left(R"(\n\w[\w<>]*[ \t]+(?!main)\w+\([^()]*(Texture|Sampler)[^()]*\)\s*\{)");
+        if (std::regex_search(text, left)) {
+            LOGE("vulkan: opaque param left in %s", entry);
+            LOGE("%s", text.c_str());
+        }
+    }
     const char* src = text.c_str();
     glslang::TShader sh(lang);
     sh.setStrings(&src, 1);
@@ -173,7 +185,7 @@ bool Compile(const std::string& hlsl, const char* entry, Stage stage, uint64_t h
         return false;
     }
     glslang::SpvOptions options;
-    options.disableOptimizer = true;
+    options.disableOptimizer = !g_inline;
     options.validate = false;
     spirv.clear();
     glslang::GlslangToSpv(*program.getIntermediate(lang), spirv, &options);
