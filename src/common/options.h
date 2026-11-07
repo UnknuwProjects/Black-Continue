@@ -64,7 +64,13 @@ struct Options {
     bool unlock_levels = false;  // cheat: every mission open on every difficulty, the save is left as it is
     bool unlock_black_ops = false;  // cheat: Black Ops open on the missions open on another difficulty, the same
     bool esp = false;  // cheat: a line from the bottom of the screen and a box to each living enemy
-    bool aimbot = false;  // cheat: aiming in turns the view to the body of the enemy nearest the crosshair
+    bool aimbot = false;  // cheat, AUTO HEADSHOT: aiming in turns the view to the head of the enemy nearest the crosshair
+    uint32_t aim_assist = 0;  // cheat: 0 off, 1 to 3 a pull of the view to an enemy near the crosshair while firing or aiming
+    bool esp_health = true;  // the ESP's health bar over each enemy
+    bool ignore_allies = true;  // the ESP and the aim cheats take only the characters an AI drives (src/game/esp.cpp)
+    uint32_t esp_height = 180;  // centimetres: the ESP box's height, and what the head and body points are taken from
+    uint32_t esp_on_color = 0x3CFF3C;   // 0xRRGGBB, the lines and boxes of the enemies in the view
+    uint32_t esp_off_color = 0xFF3C3C;  // the arrows to the enemies out of it
     std::map<std::string, std::string> keys;  // action id to key names, absent is the default
 };
 Options& Opt();
