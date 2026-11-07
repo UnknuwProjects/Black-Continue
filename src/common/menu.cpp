@@ -293,7 +293,9 @@ enum RowId { kRenderResolution, kMaxFps, kVsync, kFpsCounter, kAniso, kReloadBlu
              kCheckUpdates, kTouchSensitivity, kLeftDeadzone, kRightDeadzone, kLeftSensitivity, kRightSensitivity,
              kScreenFilter, kGyroInvertX, kGyroInvertY, kUnlockLevels, kUnlockBlackOps, kTouchSkin, kCredit, kBloom,
              kFog, kAntiAliasing, kHdr, kEsp, kAimbot, kTouchStick, kDynamicRes, kDynamicTarget, kDynamicMin,
-             kDynamicMax, kDynamicHold, kAutoUpdate, kInfiniteMedkits, kTouchFireLook, kTouchAim, kSteadyAim, kAimView, kNoKick, kAdsCustom, kMaliFix };
+             kDynamicMax, kDynamicHold, kAutoUpdate, kInfiniteMedkits, kTouchFireLook, kTouchAim, kSteadyAim, kAimView, kNoKick, kAdsCustom, kMaliFix,
+             kEspHealth, kIgnoreAllies, kEspHeight, kEspOnRed, kEspOnGreen, kEspOnBlue, kEspOffRed, kEspOffGreen,
+             kEspOffBlue, kAimAssist };
 
 using rows::Kind;
 using rows::Row;
@@ -379,7 +381,17 @@ constexpr Row kCheatRows[] = {
     {Kind::Value, kInfiniteMedkits, "INFINITE MEDKITS"},
     {Kind::Value, kOneHitKill, "ONE-HIT KILL"},
     {Kind::Value, kEsp, "ESP LINES"},
-    {Kind::Value, kAimbot, "AIMBOT (WHILE AIMING IN)"},  // esp.cpp turns the view only at a zoom above 1
+    {Kind::Value, kEspHealth, "ESP HEALTH BARS"},
+    {Kind::Value, kEspHeight, "ESP BOX HEIGHT"},
+    {Kind::Value, kIgnoreAllies, "IGNORE ALLIES"},
+    {Kind::Value, kEspOnRed, "ESP IN VIEW RED"},
+    {Kind::Value, kEspOnGreen, "ESP IN VIEW GREEN"},
+    {Kind::Value, kEspOnBlue, "ESP IN VIEW BLUE"},
+    {Kind::Value, kEspOffRed, "ESP OUT OF VIEW RED"},
+    {Kind::Value, kEspOffGreen, "ESP OUT OF VIEW GREEN"},
+    {Kind::Value, kEspOffBlue, "ESP OUT OF VIEW BLUE"},
+    {Kind::Value, kAimbot, "AUTO HEADSHOT (WHILE AIMING IN)"},  // esp.cpp turns the view only at a zoom above 1
+    {Kind::Value, kAimAssist, "AIM ASSIST"},
     {Kind::Heading, -1, "GAME"},
     {Kind::Value, kGameSpeed, "GAME SPEED"},
     {Kind::Value, kUnlockLevels, "UNLOCK ALL MISSIONS"},
@@ -467,6 +479,8 @@ bool* ToggleFlag(Settings& s, int id) {
         case kUnlockBlackOps: return &o.unlock_black_ops;
         case kEsp: return &o.esp;
         case kAimbot: return &o.aimbot;
+        case kEspHealth: return &o.esp_health;
+        case kIgnoreAllies: return &o.ignore_allies;
         case kDynamicRes: return &o.dynamic_resolution;
         default: return nullptr;
     }
@@ -566,6 +580,17 @@ bool StepGraphicsRow(int id, int step, Settings& s, char (&text)[64]) {
     }
 }
 
+// a packed 0xRRGGBB colour's channel (0 red, 1 green, 2 blue), 0 to 255 in steps of 5
+void ColorChannel(uint32_t& packed, int channel, int step, char (&text)[64]) {
+    int shift = 16 - 8 * channel;
+    int value = int((packed >> shift) & 255);
+    if (step) {
+        value = StepRange(value, 0, 255, 5, step);
+        packed = (packed & ~(255u << shift)) | (uint32_t(value) << shift);
+    }
+    std::snprintf(text, sizeof(text), "%d", value);
+}
+
 // the cheat rows that are no ON / OFF, stepped first; false for another row
 bool StepCheatRow(int id, int step, char (&text)[64]) {
     game::Options& o = game::Opt();
@@ -588,6 +613,23 @@ bool StepCheatRow(int id, int step, char (&text)[64]) {
             std::snprintf(text, sizeof(text), "%s", kNames[StepTable(kValues, o.ads_custom, step)]);
             return true;
         }
+        case kAimAssist: {
+            static constexpr uint32_t kValues[] = {0, 1, 2, 3};
+            static const char* const kNames[] = {"OFF", "LOW", "MEDIUM", "HIGH"};
+            std::snprintf(text, sizeof(text), "%s", kNames[StepTable(kValues, o.aim_assist, step)]);
+            return true;
+        }
+        case kEspHeight:
+            // 1.00 to 2.50 metres in steps of 5 centimetres
+            if (step) o.esp_height = uint32_t(StepRange(int(o.esp_height), 100, 250, 5, step));
+            std::snprintf(text, sizeof(text), o.esp_height == 180 ? "%.2f M (DEFAULT)" : "%.2f M", double(o.esp_height) / 100.0);
+            return true;
+        case kEspOnRed: ColorChannel(o.esp_on_color, 0, step, text); return true;
+        case kEspOnGreen: ColorChannel(o.esp_on_color, 1, step, text); return true;
+        case kEspOnBlue: ColorChannel(o.esp_on_color, 2, step, text); return true;
+        case kEspOffRed: ColorChannel(o.esp_off_color, 0, step, text); return true;
+        case kEspOffGreen: ColorChannel(o.esp_off_color, 1, step, text); return true;
+        case kEspOffBlue: ColorChannel(o.esp_off_color, 2, step, text); return true;
         case kGameSpeed:
             // 25% to 200% in steps of 25
             if (step) o.game_speed = uint32_t(StepRange(int(o.game_speed), 25, 200, 25, step));
@@ -807,6 +849,12 @@ void RestoreDefaults(int page) {
         o.unlock_black_ops = none.unlock_black_ops;
         o.esp = none.esp;
         o.aimbot = none.aimbot;
+        o.aim_assist = none.aim_assist;
+        o.esp_health = none.esp_health;
+        o.ignore_allies = none.ignore_allies;
+        o.esp_height = none.esp_height;
+        o.esp_on_color = none.esp_on_color;
+        o.esp_off_color = none.esp_off_color;
         Changed();
         return;
     }
@@ -843,6 +891,12 @@ void RestoreDefaults(int page) {
     o.unlock_black_ops = keep.unlock_black_ops;
     o.esp = keep.esp;
     o.aimbot = keep.aimbot;
+    o.aim_assist = keep.aim_assist;
+    o.esp_health = keep.esp_health;
+    o.ignore_allies = keep.ignore_allies;
+    o.esp_height = keep.esp_height;
+    o.esp_on_color = keep.esp_on_color;
+    o.esp_off_color = keep.esp_off_color;
     Changed();
 }
 
