@@ -14,6 +14,7 @@ namespace {
 // character: the player is the one in the world container, its kind 2
 constexpr uint32_t kCharKind = 0xC4;
 constexpr uint32_t kCharGrenades = 0x286;  // uint16
+constexpr uint16_t kGrenadeMax = 9;
 constexpr uint32_t kCharHealth = 0x2F0;    // float, the difficulty's full at most
 constexpr uint32_t kCharDying = 0x384;     // not 0 once it is killed
 // byte the scripts set: the player's damage calls (its class's 0x1ED990, 0x1ED700, 0x1ED2B0, 0x1ED5D0, and
@@ -64,6 +65,9 @@ X86_EXTERN_FUNC(__imp__sub_001E5FA0);
 X86_FUNC(sub_001E5FA0) {
     uint32_t me = ctx.ecx;
     if (me && me == Player() && R32(me + kCharKind) == kPlayerKind) {
+        // infinite grenades: the count is filled to the maximum on its own, a throw needs one in hand
+        if (game::Opt().infinite_grenades && G<uint16_t>(me + kCharGrenades) < kGrenadeMax)
+            G<uint16_t>(me + kCharGrenades) = kGrenadeMax;
         if (game::Opt().god_mode && !R32(me + kCharDying)) {
             float& health = G<float>(me + kCharHealth);
             health = std::max(health, FullHealth());
