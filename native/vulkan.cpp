@@ -1162,6 +1162,9 @@ private:
     PFN_vkGetSemaphoreCounterValueKHR counter_value_ = nullptr;
     bool dynamic_ = true;  // dynamic rendering; Vulkan 1.1 drivers (older Adrenos) only have render passes
     void LoadMaliFix();
+    void ApplyMaliFix();
+    uint32_t mali_mode_ = ~0u;
+    bool shader_fix_ = false;
     bool timeline_ok_ = true;  // without it a fence per submit stands in for the timeline's values
     struct Pending {
         uint64_t value;
@@ -1245,13 +1248,37 @@ private:
     } while (0)
 
 // ---- Mali fix, the MALI FIX row of the graphics menu: 0 off, 1 auto (the shader fix on ARM's Mali only),
-// 2 shader fix, 3 glow passes dropped, 4 both. The shader fix is read here, as the renderer starts
+// 2 shader fix, 3 glow passes dropped, 4 both. The shader fix is set here as the renderer starts, and again by
+// ApplyMaliFix when the row changes
 void VulkanBackend::LoadMaliFix() {
     uint32_t mode = game::Opt().mali_fix;
     bool mali = props_.vendorID == 0x13B5;
     bool shaders = mode == 2 || mode == 4 || (mode == 1 && mali);
     vkshader::SetInline(shaders);
+    mali_mode_ = mode;
+    shader_fix_ = shaders;
     LOGR("vulkan: vendor %04X, mali fix %u, shader fix %s", props_.vendorID, mode, shaders ? "on" : "off");
+}
+
+// the row changed: the shaders are made again the other way. The modules and pipelines go once the GPU is done with
+// them, and the next draw builds what it needs (the modules of each way are kept on disk, so a second change is quick)
+void VulkanBackend::ApplyMaliFix() {
+    uint32_t mode = game::Opt().mali_fix;
+    if (mode == mali_mode_) return;
+    mali_mode_ = mode;
+    bool shaders = mode == 2 || mode == 4 || (mode == 1 && props_.vendorID == 0x13B5);
+    if (shaders == shader_fix_) return;  // only the glow passes changed, which follow the row at each draw
+    shader_fix_ = shaders;
+    Submit(true, false);
+    for (auto& [key, pipe] : pipelines_)
+        if (pipe) vkDestroyPipeline(dev_, pipe, nullptr);
+    for (auto& [hash, module] : modules_)
+        if (module) vkDestroyShaderModule(dev_, module, nullptr);
+    pipelines_.clear();
+    modules_.clear();
+    shader_src_.clear();
+    vkshader::SetInline(shaders);
+    LOGR("vulkan: mali fix %u, shader fix %s", mode, shaders ? "on" : "off");
 }
 
 // ---- Init
@@ -3411,6 +3438,7 @@ void VulkanBackend::Present(const Surface& front) {
     if (presents_ % 600 == 0) SavePipelineCache();
     dynres::Frame();
     ApplySettings();
+    ApplyMaliFix();
 }
 
 // the slot is not reused before the caller's wait: the title runs at most one present ahead
