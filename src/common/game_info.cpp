@@ -96,6 +96,7 @@ const app::GameInfo app::kGame = {
                 {"fog", &game::Opt().fog, nullptr},
                 {"anti_aliasing", nullptr, &game::Opt().anti_aliasing},
                 {"hdr", &game::Opt().hdr, nullptr},
+                {"mali_fix", nullptr, &game::Opt().mali_fix},
                 {"fmv_scale", nullptr, &game::Opt().fmv_scale},
                 {"screen_filter", nullptr, &game::Opt().screen_filter},
                 {"invert_mouse", &game::Opt().invert_mouse, nullptr},
