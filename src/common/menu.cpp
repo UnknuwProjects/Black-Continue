@@ -28,6 +28,10 @@
 #include "common/translations.h"
 #include "game/weapons.h"
 
+namespace game {
+void EspOverlay();  // esp.cpp
+}
+
 // native/gyro.cpp: aiming by turning the phone
 namespace gyro {
 uint32_t CurrentMode();
@@ -294,7 +298,7 @@ enum RowId { kRenderResolution, kMaxFps, kVsync, kFpsCounter, kAniso, kReloadBlu
              kScreenFilter, kGyroInvertX, kGyroInvertY, kUnlockLevels, kUnlockBlackOps, kTouchSkin, kCredit, kBloom,
              kFog, kAntiAliasing, kHdr, kEsp, kAimbot, kTouchStick, kDynamicRes, kDynamicTarget, kDynamicMin,
              kDynamicMax, kDynamicHold, kAutoUpdate, kInfiniteMedkits, kTouchFireLook, kTouchAim, kSteadyAim, kAimView, kNoKick, kAdsCustom, kMaliFix,
-             kEspHealth, kIgnoreAllies, kEspHeight, kEspOnRed, kEspOnGreen, kEspOnBlue, kEspOffRed, kEspOffGreen,
+             kEspHealth, kEspLabel, kHeadHeight, kEspHeight, kEspOnRed, kEspOnGreen, kEspOnBlue, kEspOffRed, kEspOffGreen,
              kEspOffBlue, kAimAssist };
 
 using rows::Kind;
@@ -325,7 +329,7 @@ constexpr Row kGraphicsRows[] = {
     {Kind::Value, kFog, "FOG"},
     {Kind::Value, kAntiAliasing, "ANTI-ALIASING"},
     {Kind::Value, kHdr, "HDR"},
-    {Kind::Value, kMaliFix, "MALI FIX (RESTART)"},
+    {Kind::Value, kMaliFix, "MALI FIX"},
 };
 
 constexpr Row kTouchRows[] = {
@@ -382,8 +386,8 @@ constexpr Row kCheatRows[] = {
     {Kind::Value, kOneHitKill, "ONE-HIT KILL"},
     {Kind::Value, kEsp, "ESP LINES"},
     {Kind::Value, kEspHealth, "ESP HEALTH BARS"},
+    {Kind::Value, kEspLabel, "ESP LABEL"},
     {Kind::Value, kEspHeight, "ESP BOX HEIGHT"},
-    {Kind::Value, kIgnoreAllies, "IGNORE ALLIES"},
     {Kind::Value, kEspOnRed, "ESP IN VIEW RED"},
     {Kind::Value, kEspOnGreen, "ESP IN VIEW GREEN"},
     {Kind::Value, kEspOnBlue, "ESP IN VIEW BLUE"},
@@ -391,6 +395,7 @@ constexpr Row kCheatRows[] = {
     {Kind::Value, kEspOffGreen, "ESP OUT OF VIEW GREEN"},
     {Kind::Value, kEspOffBlue, "ESP OUT OF VIEW BLUE"},
     {Kind::Value, kAimbot, "AUTO HEADSHOT (WHILE AIMING IN)"},  // esp.cpp turns the view only at a zoom above 1
+    {Kind::Value, kHeadHeight, "HEADSHOT HEIGHT"},
     {Kind::Value, kAimAssist, "AIM ASSIST"},
     {Kind::Heading, -1, "GAME"},
     {Kind::Value, kGameSpeed, "GAME SPEED"},
@@ -480,7 +485,6 @@ bool* ToggleFlag(Settings& s, int id) {
         case kEsp: return &o.esp;
         case kAimbot: return &o.aimbot;
         case kEspHealth: return &o.esp_health;
-        case kIgnoreAllies: return &o.ignore_allies;
         case kDynamicRes: return &o.dynamic_resolution;
         default: return nullptr;
     }
@@ -623,6 +627,17 @@ bool StepCheatRow(int id, int step, char (&text)[64]) {
             // 1.00 to 2.50 metres in steps of 5 centimetres
             if (step) o.esp_height = uint32_t(StepRange(int(o.esp_height), 100, 250, 5, step));
             std::snprintf(text, sizeof(text), o.esp_height == 180 ? "%.2f M (DEFAULT)" : "%.2f M", double(o.esp_height) / 100.0);
+            return true;
+        case kEspLabel: {
+            static constexpr uint32_t kValues[] = {0, 1, 2, 3};
+            static const char* const kNames[] = {"OFF", "HEALTH", "DISTANCE", "HEALTH + DISTANCE"};
+            std::snprintf(text, sizeof(text), "%s", kNames[StepTable(kValues, o.esp_label, step)]);
+            return true;
+        }
+        case kHeadHeight:
+            // 40% to 100% of the box's height in steps of 5
+            if (step) o.head_height = uint32_t(StepRange(int(o.head_height), 40, 100, 5, step));
+            std::snprintf(text, sizeof(text), o.head_height == 90 ? "%u%% (DEFAULT)" : "%u%%", o.head_height);
             return true;
         case kEspOnRed: ColorChannel(o.esp_on_color, 0, step, text); return true;
         case kEspOnGreen: ColorChannel(o.esp_on_color, 1, step, text); return true;
@@ -851,7 +866,8 @@ void RestoreDefaults(int page) {
         o.aimbot = none.aimbot;
         o.aim_assist = none.aim_assist;
         o.esp_health = none.esp_health;
-        o.ignore_allies = none.ignore_allies;
+        o.esp_label = none.esp_label;
+        o.head_height = none.head_height;
         o.esp_height = none.esp_height;
         o.esp_on_color = none.esp_on_color;
         o.esp_off_color = none.esp_off_color;
@@ -893,7 +909,8 @@ void RestoreDefaults(int page) {
     o.aimbot = keep.aimbot;
     o.aim_assist = keep.aim_assist;
     o.esp_health = keep.esp_health;
-    o.ignore_allies = keep.ignore_allies;
+    o.esp_label = keep.esp_label;
+    o.head_height = keep.head_height;
     o.esp_height = keep.esp_height;
     o.esp_on_color = keep.esp_on_color;
     o.esp_off_color = keep.esp_off_color;
@@ -1365,6 +1382,7 @@ void DrawUi(double fps) {
     float base_px = ImGui::GetFontSize() / std::max(io.FontGlobalScale, 0.01f);
     float em_px = std::min(io.DisplaySize.y * kUiHeightShare, io.DisplaySize.x * kUiWidthShare);
     io.FontGlobalScale = std::max(1.0f, em_px / base_px);
+    game::EspOverlay();
     if (MenuOpen()) {
         PollCapture();
         DrawPanel();
