@@ -138,6 +138,8 @@ const app::GameInfo app::kGame = {
                 {"esp_label", nullptr, &game::Opt().esp_label},
                 {"esp_health", &game::Opt().esp_health, nullptr},
                 {"head_height", nullptr, &game::Opt().head_height},
+                {"aim_target", nullptr, &game::Opt().aim_target},
+                {"esp_fit", &game::Opt().esp_fit, nullptr},
                 {"esp_height", nullptr, &game::Opt().esp_height},
                 {"esp_on_color", nullptr, &game::Opt().esp_on_color},
                 {"esp_off_color", nullptr, &game::Opt().esp_off_color}},
