@@ -10,6 +10,7 @@
 #include <glslang/Public/ResourceLimits.h>
 #include <glslang/Public/ShaderLang.h>
 
+#include "common/filelog.h"
 #include "core/log.h"
 
 namespace vkshader {
@@ -20,8 +21,10 @@ std::filesystem::path g_dir;
 std::mutex g_lock;
 // bumped when the translation below changes, so older cached modules are not used
 constexpr uint32_t kCacheVersion = 3;
-// mali: let glslang's optimizer inline the helpers that take a texture or sampler, so none goes through a function variable
+// mali: let glslang's optimizer inline the helpers that take a texture or sampler, so none goes through a function variable,
+// and (full precision) take the relaxed precision off every value, which Mali runs as 16 bit floats
 bool g_inline = false;
+bool g_precise = false;
 
 struct Param {
     std::string type, name;
@@ -105,7 +108,8 @@ std::string Adapt(const std::string& hlsl) {
 
 std::filesystem::path CachePath(uint64_t hash) {
     char name[40];
-    std::snprintf(name, sizeof(name), "%016llx_%u%s.spv", (unsigned long long)hash, kCacheVersion, g_inline ? "i" : "");
+    std::snprintf(name, sizeof(name), "%016llx_%u%s%s.spv", (unsigned long long)hash, kCacheVersion, g_inline ? "i" : "",
+                  g_precise ? "f" : "");
     return g_dir / name;
 }
 
@@ -135,7 +139,10 @@ void Store(uint64_t hash, const std::vector<uint32_t>& spirv) {
 
 }  // namespace
 
-void SetInline(bool on) { g_inline = on; }
+void Configure(bool optimize, bool full_precision) {
+    g_inline = optimize;
+    g_precise = full_precision;
+}
 
 void Init(const std::filesystem::path& cache_dir) {
     std::lock_guard lock(g_lock);
@@ -145,19 +152,41 @@ void Init(const std::filesystem::path& cache_dir) {
     g_dir = ec ? std::filesystem::path() : cache_dir;
 }
 
-bool Compile(const std::string& hlsl, const char* entry, Stage stage, uint64_t hash, std::vector<uint32_t>& spirv) {
-    if (Load(hash, spirv)) return true;
-    std::lock_guard lock(g_lock);
-    EShLanguage lang = stage == Stage::Vertex ? EShLangVertex : EShLangFragment;
-    std::string text = Adapt(hlsl);
-    // diagnosis: a helper still taking a texture or sampler after Specialize is what Mali gets wrong
-    {
-        static const std::regex left(R"(\n\w[\w<>]*[ \t]+(?!main)\w+\([^()]*(Texture|Sampler)[^()]*\)\s*\{)");
-        if (std::regex_search(text, left)) {
-            LOGE("vulkan: opaque param left in %s", entry);
-            LOGE("%s", text.c_str());
+namespace {
+
+constexpr uint32_t kOpNop = 0x00010000;  // opcode 0, one word
+
+// the RelaxedPrecision decorations in a module (OpDecorate 71 and OpMemberDecorate 72, decoration 0), made into
+// OpNops when apply is set; how many there were
+int RelaxedPrecision(std::vector<uint32_t>& s, bool apply) {
+    int n = 0;
+    for (size_t i = 5; i < s.size();) {
+        uint32_t length = s[i] >> 16, op = s[i] & 0xFFFF;
+        if (!length || i + length > s.size()) break;
+        if ((op == 71 && length == 3 && s[i + 2] == 0) || (op == 72 && length == 4 && s[i + 3] == 0)) {
+            n++;
+            if (apply)
+                for (uint32_t k = 0; k < length; k++) s[i + k] = kOpNop;
         }
+        i += length;
     }
+    return n;
+}
+
+int FunctionCalls(const std::vector<uint32_t>& s) {
+    int n = 0;
+    for (size_t i = 5; i < s.size();) {
+        uint32_t length = s[i] >> 16, op = s[i] & 0xFFFF;
+        if (!length || i + length > s.size()) break;
+        if (op == 57) n++;  // OpFunctionCall
+        i += length;
+    }
+    return n;
+}
+
+// the text through glslang to SPIR-V; the caller holds the lock
+bool Build(const std::string& text, const char* entry, Stage stage, bool optimize, std::vector<uint32_t>& spirv) {
+    EShLanguage lang = stage == Stage::Vertex ? EShLangVertex : EShLangFragment;
     const char* src = text.c_str();
     glslang::TShader sh(lang);
     sh.setStrings(&src, 1);
@@ -175,21 +204,76 @@ bool Compile(const std::string& hlsl, const char* entry, Stage stage, uint64_t h
     auto messages = EShMessages(EShMsgSpvRules | EShMsgVulkanRules | EShMsgReadHlsl | EShMsgHlslOffsets);
     if (!sh.parse(GetDefaultResources(), 100, false, messages)) {
         LOGE("vulkan: %s %s does not compile: %s", stage == Stage::Vertex ? "vertex" : "pixel", entry, sh.getInfoLog());
-        LOGE("%s", text.c_str());
+        filelog::Write("vulkan", "%s %s does not compile: %s", stage == Stage::Vertex ? "vertex" : "pixel", entry,
+                       sh.getInfoLog());
+        filelog::Write("vulkan", "%s", text.c_str());
         return false;
     }
     glslang::TProgram program;
     program.addShader(&sh);
     if (!program.link(messages) || !program.mapIO()) {
         LOGE("vulkan: %s does not link: %s", entry, program.getInfoLog());
+        filelog::Write("vulkan", "%s does not link: %s", entry, program.getInfoLog());
         return false;
     }
     glslang::SpvOptions options;
-    options.disableOptimizer = !g_inline;
+    options.disableOptimizer = !optimize;
     options.validate = false;
     spirv.clear();
     glslang::GlslangToSpv(*program.getIntermediate(lang), spirv, &options);
-    if (spirv.empty()) return false;
+    return !spirv.empty();
+}
+
+// does the optimizer do anything in this build of glslang: a helper taking a texture and a sampler is inlined by it,
+// the call is gone from the module. Told once in the log
+void TestOptimizer() {
+    static bool done = false;
+    if (done) return;
+    done = true;
+    static const char* kTest = R"(
+Texture2D t : register(t0);
+SamplerState s : register(s0);
+float4 Helper(Texture2D tex, SamplerState ss, float2 uv) { return tex.Sample(ss, uv); }
+float4 main(float2 uv : TEXCOORD0) : SV_Target { return Helper(t, s, uv); }
+)";
+    std::vector<uint32_t> plain, optimized;
+    bool a = Build(kTest, "main", Stage::Pixel, false, plain), b = Build(kTest, "main", Stage::Pixel, true, optimized);
+    if (!a || !b) {
+        filelog::Write("vulkan", "optimizer test: the test shader did not build (%d, %d)", a, b);
+        return;
+    }
+    filelog::Write("vulkan", "optimizer test: calls without it %d, with it %d, words %zu to %zu: %s", FunctionCalls(plain),
+                   FunctionCalls(optimized), plain.size(), optimized.size(),
+                   FunctionCalls(optimized) < FunctionCalls(plain) ? "the optimizer works" : "NO EFFECT in this build");
+}
+
+}  // namespace
+
+bool Compile(const std::string& hlsl, const char* entry, Stage stage, uint64_t hash, std::vector<uint32_t>& spirv) {
+    if (Load(hash, spirv)) return true;
+    std::lock_guard lock(g_lock);
+    if (g_inline) TestOptimizer();
+    std::string text = Adapt(hlsl);
+    // diagnosis: a helper still taking a texture or sampler after Specialize is what Mali gets wrong
+    {
+        static const std::regex left(R"(\n\w[\w<>]*[ \t]+(?!main)\w+\([^()]*(Texture|Sampler)[^()]*\)\s*\{)");
+        static int logged = 0;
+        if (std::regex_search(text, left)) {
+            LOGE("vulkan: opaque param left in %s", entry);
+            if (logged < 6) {
+                logged++;
+                filelog::Write("vulkan", "opaque param left in %s (the helper still takes a texture or a sampler):", entry);
+                filelog::Write("vulkan", "%s", text.c_str());
+            }
+        }
+    }
+    if (!Build(text, entry, stage, g_inline, spirv)) return false;
+    int relaxed = RelaxedPrecision(spirv, g_precise);
+    static int told = 0;
+    if (told < 14 && (relaxed || told < 4)) {
+        told++;
+        filelog::Write("vulkan", "shader %s: %d relaxed precision decorations%s", entry, relaxed, g_precise ? ", taken off" : "");
+    }
     Store(hash, spirv);
     return true;
 }
