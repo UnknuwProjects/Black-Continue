@@ -26,6 +26,7 @@
 
 #include "app/app.h"
 #include "common/aspect.h"
+#include "common/filelog.h"
 #include "common/options.h"
 #include "core/log.h"
 #include "d3d/gpu_frame.h"
@@ -39,7 +40,7 @@
 #include "vk_shader.h"
 
 namespace vkshader {
-void SetInline(bool on);
+void Configure(bool optimize, bool full_precision);
 }
 
 namespace gpu {
@@ -1119,6 +1120,7 @@ private:
     bool BindStageTextures(const State& s, DrawTextures& stages);
     VkImageView BindTexture(const State& s, int stage, DrawTextures& stages);
     bool GlowComposite(const State& s, const DrawTextures& stages) const;
+    bool GlowWide(const State& s, const DrawTextures& stages) const;
     VkImageView BindTargetTexture(const State& s, int stage, const TextureDesc& d, Target& t, bool box,
                                   DrawTextures& stages);
     VkImageView BindGuestTexture(const State& s, int stage, const TextureDesc& d, const FormatInfo& fi,
@@ -1164,7 +1166,7 @@ private:
     void LoadMaliFix();
     void ApplyMaliFix();
     uint32_t mali_mode_ = ~0u;
-    bool shader_fix_ = false;
+    int shader_flags_ = 0;  // 1 optimizer, 2 full precision: how the shaders in memory were made
     bool timeline_ok_ = true;  // without it a fence per submit stands in for the timeline's values
     struct Pending {
         uint64_t value;
@@ -1247,28 +1249,50 @@ private:
         }                                                              \
     } while (0)
 
-// ---- Mali fix, the MALI FIX row of the graphics menu: 0 off, 1 auto (the shader fix on ARM's Mali only),
-// 2 shader fix, 3 glow passes dropped, 4 both. The shader fix is set here as the renderer starts, and again by
-// ApplyMaliFix when the row changes
-void VulkanBackend::LoadMaliFix() {
-    uint32_t mode = game::Opt().mali_fix;
-    bool mali = props_.vendorID == 0x13B5;
-    bool shaders = mode == 2 || mode == 4 || (mode == 1 && mali);
-    vkshader::SetInline(shaders);
-    mali_mode_ = mode;
-    shader_fix_ = shaders;
-    LOGR("vulkan: vendor %04X, mali fix %u, shader fix %s", props_.vendorID, mode, shaders ? "on" : "off");
+// ---- Mali fix, the MALI FIX row of the graphics menu. 0 off, 1 auto (the shader fix on ARM's Mali only), 2 shader fix
+// (the shaders' helpers that take a texture are inlined), 3 glow passes dropped, 4 both, 5 full precision (no relaxed
+// precision in the shaders), 6 wide drop (every pass that reads a smaller target onto a full size one), 7 the shader fix,
+// full precision and the wide drop. A change applies at once
+struct MaliFlags {
+    bool optimize = false, glow = false, precise = false, wide = false;
+};
+
+MaliFlags MaliFlagsFor(uint32_t mode, bool mali) {
+    switch (mode) {
+        case 1: return {mali, false, false, false};
+        case 2: return {true, false, false, false};
+        case 3: return {false, true, false, false};
+        case 4: return {true, true, false, false};
+        case 5: return {false, false, true, false};
+        case 6: return {false, false, false, true};
+        case 7: return {true, false, true, true};
+        default: return {};
+    }
 }
 
-// the row changed: the shaders are made again the other way. The modules and pipelines go once the GPU is done with
+void VulkanBackend::LoadMaliFix() {
+    uint32_t mode = game::Opt().mali_fix;
+    MaliFlags f = MaliFlagsFor(mode, props_.vendorID == 0x13B5);
+    vkshader::Configure(f.optimize, f.precise);
+    mali_mode_ = mode;
+    shader_flags_ = (f.optimize ? 1 : 0) | (f.precise ? 2 : 0);
+    LOGR("vulkan: vendor %04X, mali fix %u, shader flags %d", props_.vendorID, mode, shader_flags_);
+    filelog::Write("vulkan", "vendor %04X, mali fix mode %u: optimizer %d, full precision %d, glow drop %d, wide drop %d",
+                   props_.vendorID, mode, f.optimize, f.precise, f.glow, f.wide);
+}
+
+// the row changed: when the shaders are to be made another way, the modules and pipelines go once the GPU is done with
 // them, and the next draw builds what it needs (the modules of each way are kept on disk, so a second change is quick)
 void VulkanBackend::ApplyMaliFix() {
     uint32_t mode = game::Opt().mali_fix;
     if (mode == mali_mode_) return;
     mali_mode_ = mode;
-    bool shaders = mode == 2 || mode == 4 || (mode == 1 && props_.vendorID == 0x13B5);
-    if (shaders == shader_fix_) return;  // only the glow passes changed, which follow the row at each draw
-    shader_fix_ = shaders;
+    MaliFlags f = MaliFlagsFor(mode, props_.vendorID == 0x13B5);
+    int flags = (f.optimize ? 1 : 0) | (f.precise ? 2 : 0);
+    filelog::Write("vulkan", "mali fix mode %u: optimizer %d, full precision %d, glow drop %d, wide drop %d", mode, f.optimize,
+                   f.precise, f.glow, f.wide);
+    if (flags == shader_flags_) return;  // only the glow drops changed, which follow the row at each draw
+    shader_flags_ = flags;
     Submit(true, false);
     for (auto& [key, pipe] : pipelines_)
         if (pipe) vkDestroyPipeline(dev_, pipe, nullptr);
@@ -1277,8 +1301,7 @@ void VulkanBackend::ApplyMaliFix() {
     pipelines_.clear();
     modules_.clear();
     shader_src_.clear();
-    vkshader::SetInline(shaders);
-    LOGR("vulkan: mali fix %u, shader fix %s", mode, shaders ? "on" : "off");
+    vkshader::Configure(f.optimize, f.precise);
 }
 
 // ---- Init
@@ -1353,6 +1376,9 @@ bool VulkanBackend::PickDevice() {
     for (VkPhysicalDevice pd : pds) {
         VkPhysicalDeviceProperties p;
         vkGetPhysicalDeviceProperties(pd, &p);
+        filelog::Write("vulkan", "GPU: %s, Vulkan %u.%u.%u, driver %08X, vendor %04X, device %04X", p.deviceName,
+                       VK_API_VERSION_MAJOR(p.apiVersion), VK_API_VERSION_MINOR(p.apiVersion),
+                       VK_API_VERSION_PATCH(p.apiVersion), p.driverVersion, p.vendorID, p.deviceID);
         LOGR("GPU: %s, Vulkan %u.%u.%u, driver %08X", p.deviceName, VK_API_VERSION_MAJOR(p.apiVersion),
              VK_API_VERSION_MINOR(p.apiVersion), VK_API_VERSION_PATCH(p.apiVersion), p.driverVersion);
         if (p.apiVersion < VK_API_VERSION_1_1) {
@@ -2864,8 +2890,28 @@ bool VulkanBackend::GlowComposite(const State& s, const DrawTextures& stages) co
         static std::set<uint64_t> seen;
         uint64_t kind = uint64_t(stages.gw[i]) << 32 | SimpleState(s, kMSrcBlend) << 16 | draw_rt_->gw;
         if (seen.size() < 16 && seen.insert(kind).second)
+        {
             LOGR("vulkan: bloom off skips %u wide onto %u wide, src blend %u", stages.gw[i], draw_rt_->gw,
                  SimpleState(s, kMSrcBlend));
+            filelog::Write("vulkan", "glow composite: %u wide onto %u wide, src blend %u", stages.gw[i], draw_rt_->gw,
+                           SimpleState(s, kMSrcBlend));
+        }
+        return true;
+    }
+    return false;
+}
+
+// experimental (MALI FIX, the wide drops): any blended draw onto a full size target that reads a smaller render target,
+// whatever its blend, which takes in the glow's composites the one above does not know. Each kind once in the log
+bool VulkanBackend::GlowWide(const State& s, const DrawTextures& stages) const {
+    if (!draw_rt_ || draw_rt_->gw < guest_w_ || !SimpleState(s, kMBlendEnable)) return false;
+    for (int i = 0; i < 4; i++) {
+        if (!stages.gw[i] || stages.gw[i] >= draw_rt_->gw) continue;
+        static std::set<uint64_t> seen;
+        uint64_t kind = uint64_t(stages.gw[i]) << 32 | SimpleState(s, kMSrcBlend) << 16 | SimpleState(s, kMDestBlend);
+        if (seen.size() < 24 && seen.insert(kind).second)
+            filelog::Write("vulkan", "wide drop: %u wide onto %u wide, src blend %u, dest blend %u", stages.gw[i],
+                           draw_rt_->gw, SimpleState(s, kMSrcBlend), SimpleState(s, kMDestBlend));
         return true;
     }
     return false;
@@ -2892,7 +2938,9 @@ void VulkanBackend::Draw(const State& s, uint32_t prim, uint32_t start, uint32_t
 
     DrawTextures stages;
     if (!BindStageTextures(s, stages) || !draw_rt_ && !draw_ds_) return;
-    if ((!game::Opt().bloom || game::Opt().mali_fix == 3 || game::Opt().mali_fix == 4) && GlowComposite(s, stages)) return;
+    MaliFlags fix = MaliFlagsFor(game::Opt().mali_fix, props_.vendorID == 0x13B5);
+    if ((!game::Opt().bloom || fix.glow) && GlowComposite(s, stages)) return;
+    if (fix.wide && GlowWide(s, stages)) return;
     PixelKey pk = MakePixelKey(s, stages.info);
     sh.pkey = Hash(&pk, sizeof(pk));
     EnsurePixelShader(pk, sh);
