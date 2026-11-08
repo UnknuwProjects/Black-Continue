@@ -114,7 +114,6 @@ constexpr Entry kEntries[] = {
     {"ADS MODE", {u"Mode ADS", u"ADS-Modus", u"Modalità ADS", u"Modo ADS", u"Mode ADS"}},
     {"GOD MODE", {u"Invincibilité", u"Unverwundbarkeit", u"Invincibilità", u"Invencibilidad", u"Mode dewa"}},
     {"ONE-HIT KILL", {u"Mort en un coup", u"Ein-Treffer-Kill", u"Uccisione con un colpo", u"Muerte de un golpe", u"Mati sekali tembak"}},
-    {"ESP LINES", {u"Lignes ESP", u"ESP-Linien", u"Linee ESP", u"Líneas ESP", u"Garis ESP"}},
     {"AUTO HEADSHOT (WHILE AIMING IN)", {u"Tir à la tête auto (en visant)", u"Auto-Kopfschuss (beim Zielen)", u"Colpo alla testa auto (mirando)", u"Disparo a la cabeza auto (al apuntar)", u"Tembak kepala otomatis (saat membidik)"}},
     {"AIM ASSIST", {u"Aide à la visée", u"Zielhilfe", u"Assistenza alla mira", u"Asistencia de puntería", u"Bantuan bidik"}},
     {"ESP HEALTH BARS", {{}, {}, {}, {}, u"Bar nyawa ESP"}},
