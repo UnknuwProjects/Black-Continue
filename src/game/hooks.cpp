@@ -17,6 +17,7 @@
 #include <thread>
 
 #include "app/app.h"
+#include "common/filelog.h"
 #include "common/mouse_keyboard.h"
 #include "common/options.h"
 #include "core/input.h"
@@ -800,6 +801,63 @@ static void RestoreAmmo(uint32_t weapon, const KeptAmmo& kept) {
     if (G<uint16_t>(kept.ammo + kAmmoClip) < kept.clip) G<uint16_t>(kept.ammo + kAmmoClip) = kept.clip;
 }
 
+// diagnosis for NO SPREAD and for a launcher that fires again at once, only writes: weapon_dump.log has each kind of
+// weapon the player holds once, the words of the weapon, of its data and of what their pointers lead to, to tell the
+// weapons apart (a sniper's spread is near nothing, a shotgun's is wide); weapon_trace.log has the first shots, frame
+// by frame, with the weapon's state, wait and rounds (try it with INFINITE AMMO off)
+// the 64 MB of memory is at the bottom of the address space and again from 0x80000000 (the weapon table is there)
+static bool GuestPointer(uint32_t v) { return !(v & 3) && ((v >= 0x10000 && v < 0x04000000) || (v >= 0x80000000 && v < 0x84000000)); }
+
+static void DumpWords(const char* what, uint32_t at, uint32_t bytes) {
+    for (uint32_t off = 0; off < bytes; off += 4) {
+        uint32_t v = R32(at + off);
+        if (!v) continue;
+        float f;
+        std::memcpy(&f, &v, 4);
+        if (std::fabs(f) >= 1e-4f && std::fabs(f) < 1e6f)
+            filelog::Write("weapon_dump", "%s +0x%03X %08X %.4f", what, off, v, f);
+        else
+            filelog::Write("weapon_dump", "%s +0x%03X %08X", what, off, v);
+    }
+}
+
+static void DumpWeapon(uint32_t weapon) {
+    static std::set<uint32_t> done;  // by the weapon's data: each kind once
+    uint32_t data = R32(weapon + kWeaponData);
+    if (!GuestPointer(data) || !done.insert(data).second) return;
+    const char* name = TableName(data);
+    filelog::Write("weapon_dump", "==== %s weapon %08X data %08X", name ? name : "?", weapon, data);
+    DumpWords("weapon", weapon, 0x180);
+    DumpWords("data", data, kTableStride);
+    // one step into what they point at
+    int followed = 0;
+    for (uint32_t from : {weapon, data})
+        for (uint32_t off = 0; off < (from == weapon ? 0x180u : kTableStride) && followed < 16; off += 4) {
+            uint32_t v = R32(from + off);
+            if (!GuestPointer(v) || v == weapon || v == data) continue;
+            char tag[48];
+            std::snprintf(tag, sizeof(tag), "ptr %08X from +0x%X", v, off);
+            DumpWords(tag, v, 0x80);
+            followed++;
+        }
+}
+
+static void TraceShot(uint32_t weapon, bool shot) {
+    static int shots = 0, left = 0;
+    if (shot && shots < 12) {
+        shots++;
+        left = 90;
+        const char* name = TableName(R32(weapon + kWeaponData));
+        filelog::Write("weapon_trace", "---- shot %d %s", shots, name ? name : "?");
+    }
+    if (left <= 0) return;
+    left--;
+    uint32_t ammo = R32(weapon + kWeaponAmmo);
+    filelog::Write("weapon_trace", "t%02d state %u wait %.4f clip %u total %u rounds %u", 90 - left, R32(weapon + kWeaponState),
+                   G<float>(weapon + kWeaponWait), ammo ? unsigned(G<uint16_t>(ammo + kAmmoClip)) : 0u,
+                   ammo ? R32(ammo + kAmmoTotal) : 0u, Rounds(weapon));
+}
+
 // the wait between a weapon's shots. The frame of a first shot is part of it: the fire clip runs that frame too
 // and holds its next shot where the wait ends
 X86_EXTERN_FUNC(__imp__sub_001EEFD0);
@@ -815,9 +873,11 @@ X86_FUNC(sub_001EEFD0) {
     RestoreAmmo(weapon, kept);
     uint32_t me = R32(weapon + kWeaponOwner);
     // the rapid fire cheat: a shot's wait, its fire mode's +0x20, is that many times shorter
-    uint32_t faster = std::clamp(game::Opt().rapid_fire, 1u, 4u);
+    uint32_t faster = std::clamp(game::Opt().rapid_fire, 1u, 10u);
     if (shot && me == Player() && wait > 0) wait /= float(faster);
     if (me == Player()) {
+        DumpWeapon(weapon);
+        TraceShot(weapon, shot);
         if (R32(weapon + kWeaponState) != 1 || wait != rest) g_idle_early = false;
         else if (g_idle_early) W32(me + kPlayerFireRequest, 0);  // the fire request is spent, as on the console
     }
