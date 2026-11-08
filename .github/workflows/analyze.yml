@@ -14,8 +14,8 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: "sub_XXXXXXXX or 0xXXXXXX, several apart by spaces"
-        default: "0x1DAFF0 0x169960 0x168E20 0x1D89E0 0x198000"
+        description: "sub_XXXXXXXX or 0xXXXXXX, several apart by spaces; add :N for N body lines (default 30)"
+        default: "0xCFEB0 0x1D6C30 0x1C78D0 0xA30B0 0xA90E0 0x1DAFF0:350"
         required: true
 
 permissions:
@@ -72,10 +72,14 @@ jobs:
           cat > "$RUNNER_TEMP/find.py" <<'PY'
           import collections, pathlib, re, sys
 
-          targets = sys.argv[1].replace(",", " ").split()
-          for t in targets:
-              if not re.fullmatch(r"sub_[0-9A-Fa-f]{6,8}|0x[0-9A-Fa-f]{1,8}", t):
+          targets, lines_for = [], {}
+          for t in sys.argv[1].replace(",", " ").split():
+              m = re.fullmatch(r"(sub_[0-9A-Fa-f]{6,8}|0x[0-9A-Fa-f]{1,8})(?::(\d{1,4}))?", t)
+              if not m:
                   sys.exit("not a function name or an address: " + t)
+              targets.append(m.group(1))
+              if m.group(2):
+                  lines_for[m.group(1)] = int(m.group(2))
           root = pathlib.Path("generated/game")
           TABLE = "x86_func_mapping.cpp"  # every function's address and name: not a caller of anything
           # a definition is X86_FUNC(__imp__sub_XXXXXXXX) at column 0; a call is an indented line with a sub_ in it
@@ -103,7 +107,7 @@ jobs:
               r"\{0x([0-9A-Fa-f]+)u,\s*(sub_[0-9A-Fa-f]+)\}", (root / TABLE).read_text(errors="replace")))
           out = []
 
-          def show(name, why):
+          def show(name, why, body=BODY):
               if name not in defs:
                   # not written the way the search expects: where the name is, and the first places as they are
                   places = [(p, i) for p, ls in files.items() for i, l in enumerate(ls) if name in l]
@@ -116,9 +120,9 @@ jobs:
               path, first, last = defs[name]
               lines = files[path][first:last]
               out.append(f"== {name} in {path.name}:{first + 1}, {len(lines)} lines, called in {called[name]} places: {why}")
-              out.extend(lines[:BODY])
-              if len(lines) > BODY:
-                  out.append(f"... {len(lines) - BODY} more lines")
+              out.extend(lines[:body])
+              if len(lines) > body:
+                  out.append(f"... {len(lines) - body} more lines")
               callees = collections.Counter(c for c in call.findall("\n".join(lines)) if c != name)
               out.append("-- calls (name, times here, places that call it, its lines):")
               for c, n in sorted(callees.items(), key=lambda x: -called[x[0]])[:CALLEES]:
@@ -134,7 +138,7 @@ jobs:
                       continue
                   # the last starts: a piece of a function can have a name of its own
                   out.append(f"## {t}: the starts just before it: " + " ".join(f"{a:#X}={n}" for a, n in before[-3:]))
-                  show(before[-1][1], f"holds {t}")
+                  show(before[-1][1], f"holds {t}", lines_for.get(t, BODY))
               else:
                   hits = collections.OrderedDict()
                   for path, lines in files.items():
@@ -146,7 +150,7 @@ jobs:
                                   hits.setdefault(start.match(lines[first]).group(1), i + 1)
                   out.append(f"## {t}: {len(hits)} functions call it: " + " ".join(hits))
                   for name in hits:
-                      show(name, f"calls {t}")
+                      show(name, f"calls {t}", lines_for.get(t, BODY))
           text = out if len(out) <= CAP else out[:CAP] + [f"... cut at {CAP} lines"]
           result = "\n".join(text)
           pathlib.Path("analysis.txt").write_text(result)
