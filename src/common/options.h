@@ -66,12 +66,13 @@ struct Options {
     bool unlock_black_ops = false;  // cheat: Black Ops open on the missions open on another difficulty, the same
     uint32_t esp_style = 0;  // cheat: what is drawn on each living enemy in view: 0 off, 1 box, 2 line from the bottom of the screen, 3 both
     bool esp_arrows = false;  // cheat: an arrow on a ring round the middle towards each enemy out of the view
-    bool aimbot = false;  // cheat, AUTO HEADSHOT: aiming in turns the view to the head of the enemy nearest the crosshair
+    bool aimbot = false;  // cheat, AIM LOCK: aiming in turns the view to the head of the nearest enemy in view with nothing in the way
     uint32_t aim_assist = 0;  // cheat: 0 off, 1 to 3 a pull of the view to an enemy near the crosshair while firing or aiming
-    uint32_t head_height = 90;  // percent of 1.80 m, the height AUTO HEADSHOT turns the view to (not the ESP box's)
+    uint32_t head_height = 90;  // percent of 1.80 m, the height AIM LOCK turns the view to (not the ESP box's)
     uint32_t head_offset = 30;  // centimetres plus 30: 0 is 30 left on the screen, 30 none, 60 is 30 right
     uint32_t esp_label = 0;  // the plate over each enemy in view, drawn by ImGui: 0 off, 1 health, 2 distance, 3 both
     uint32_t esp_label_show = 0;  // when the plate shows: 0 auto (always with a box or line, else after a hit), 1 always, 2 after a hit
+    bool esp_visible = false;  // the box, line, bar and plate only for an enemy with nothing in the way, not for every one in view; the arrows are as they were
     bool esp_health = false;  // the health bar over each enemy in view
     uint32_t esp_width = 8;  // tenths of a line of the 480 frame: the thickness of the ESP's box and line, 0 to 30
     uint32_t esp_height = 180;  // centimetres: the ESP box's height, and what the head and body points are taken from
