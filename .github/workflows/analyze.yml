@@ -15,7 +15,7 @@ on:
     inputs:
       target:
         description: "sub_XXXXXXXX or 0xXXXXXX, several apart by spaces"
-        default: "0x1E285F 0x1DBAAB 0x1DC4D4"
+        default: "0x1DAFF0 0x169960 0x168E20 0x1D89E0 0x198000"
         required: true
 
 permissions:
