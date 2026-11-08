@@ -78,10 +78,10 @@ jobs:
                   sys.exit("not a function name or an address: " + t)
           root = pathlib.Path("generated/game")
           TABLE = "x86_func_mapping.cpp"  # every function's address and name: not a caller of anything
-          # a definition starts at column 0 and names a sub_; a call is an indented line with a sub_ in it
-          start = re.compile(r"^[A-Za-z_][^;]*\b(sub_[0-9A-Fa-f]{6,8})\s*\(")
+          # a definition is X86_FUNC(__imp__sub_XXXXXXXX) at column 0; a call is an indented line with a sub_ in it
+          start = re.compile(r"^X86_FUNC\(__imp__(sub_[0-9A-Fa-f]{6,8})\)")
           call = re.compile(r"\bsub_[0-9A-Fa-f]{6,8}\b")
-          BODY, CAP = 120, 900
+          BODY, CAP, CALLEES = 30, 900, 70
 
           defs = {}  # name: (path, first, last)
           files = {}
@@ -121,7 +121,7 @@ jobs:
                   out.append(f"... {len(lines) - BODY} more lines")
               callees = collections.Counter(c for c in call.findall("\n".join(lines)) if c != name)
               out.append("-- calls (name, times here, places that call it, its lines):")
-              for c, n in sorted(callees.items(), key=lambda x: -called[x[0]]):
+              for c, n in sorted(callees.items(), key=lambda x: -called[x[0]])[:CALLEES]:
                   size = defs[c][2] - defs[c][1] if c in defs else 0
                   out.append(f"   {c} x{n}, {called[c]} places, {size} lines")
 
