@@ -4,7 +4,7 @@
 #include <cstring>
 
 #include "common/options.h"
-#include "core/log.h"
+#include "common/filelog.h"
 #include "game/layout.h"
 #include "xdk/hle.h"
 
@@ -57,27 +57,30 @@ void Spare(const Doomed& kept) {
     if (health > 0) health = kept.health - (kSliver - health);
 }
 
-// diagnosis for a headshot that counts as one: the first hits of the player's, with the seven arguments of the
+// diagnosis for a headshot that counts as one (SaveData/logs/hit_test.log): the first hits of the player's, with the seven arguments of the
 // bullet call (hex and float, and three floats behind each that points into the guest) and the victim's feet.
 // Shoot an enemy in the head five times and in the body five, then send the log: the argument that differs is
 // the hit zone, the one that is a point on the body is where the bullet landed
+// the 64 MB of memory is at the bottom of the address space and again from 0x80000000
+bool GuestPointer(uint32_t v) { return !(v & 3) && ((v >= 0x10000 && v < 0x04000000) || (v >= 0x80000000 && v < 0x84000000)); }
+
 void LogHit(uint32_t victim, uint32_t attacker, uint32_t esp) {
     static int logged = 0;
     uint32_t me = Player();
     if (logged >= 80 || !me || attacker != me || victim == me) return;
     logged++;
     const float* feet = &G<float>(victim + 0xA0);
-    LOGR("hit %d: victim %08X feet %.2f %.2f %.2f health %.1f", logged, victim, feet[0], feet[1], feet[2],
+    filelog::Write("hit_test", "hit %d: victim %08X feet %.2f %.2f %.2f health %.1f", logged, victim, feet[0], feet[1], feet[2],
          G<float>(victim + kCharHealth));
     for (int i = 0; i < 7; i++) {
         uint32_t v = R32(esp + 4 + 4 * i);
         float f;
         std::memcpy(&f, &v, 4);
-        if (v >= 0x10000 && v < 0x08000000) {
+        if (GuestPointer(v)) {
             const float* p = &G<float>(v);
-            LOGR("hit %d arg %d: %08X (guest) -> %.3f %.3f %.3f", logged, i, v, p[0], p[1], p[2]);
+            filelog::Write("hit_test", "hit %d arg %d: %08X (guest) -> %.3f %.3f %.3f", logged, i, v, p[0], p[1], p[2]);
         } else {
-            LOGR("hit %d arg %d: %08X (%d, %.3f)", logged, i, v, int32_t(v), f);
+            filelog::Write("hit_test", "hit %d arg %d: %08X (%d, %.3f)", logged, i, v, int32_t(v), f);
         }
     }
 }
