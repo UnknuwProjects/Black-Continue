@@ -130,6 +130,7 @@ const app::GameInfo app::kGame = {
                 {"esp_style", nullptr, &game::Opt().esp_style},
                 {"esp_arrows", &game::Opt().esp_arrows, nullptr},
                 {"esp_label_show", nullptr, &game::Opt().esp_label_show},
+                {"esp_visible", &game::Opt().esp_visible, nullptr},
                 {"esp_width", nullptr, &game::Opt().esp_width},
                 {"head_offset", nullptr, &game::Opt().head_offset},
                 {"aimbot", &game::Opt().aimbot, nullptr},
