@@ -156,32 +156,15 @@ namespace {
 
 constexpr uint32_t kOpNop = 0x00010000;  // opcode 0, one word
 
-// the RelaxedPrecision decorations in a module (OpDecorate 71 and OpMemberDecorate 72, decoration 0), made into
-// OpNops when apply is set; how many there were
-int RelaxedPrecision(std::vector<uint32_t>& s, bool apply) {
-    int n = 0;
+// the RelaxedPrecision decorations in a module (OpDecorate 71 and OpMemberDecorate 72, decoration 0), made into OpNops
+void DropRelaxedPrecision(std::vector<uint32_t>& s) {
     for (size_t i = 5; i < s.size();) {
         uint32_t length = s[i] >> 16, op = s[i] & 0xFFFF;
         if (!length || i + length > s.size()) break;
-        if ((op == 71 && length == 3 && s[i + 2] == 0) || (op == 72 && length == 4 && s[i + 3] == 0)) {
-            n++;
-            if (apply)
-                for (uint32_t k = 0; k < length; k++) s[i + k] = kOpNop;
-        }
+        if ((op == 71 && length == 3 && s[i + 2] == 0) || (op == 72 && length == 4 && s[i + 3] == 0))
+            for (uint32_t k = 0; k < length; k++) s[i + k] = kOpNop;
         i += length;
     }
-    return n;
-}
-
-int FunctionCalls(const std::vector<uint32_t>& s) {
-    int n = 0;
-    for (size_t i = 5; i < s.size();) {
-        uint32_t length = s[i] >> 16, op = s[i] & 0xFFFF;
-        if (!length || i + length > s.size()) break;
-        if (op == 57) n++;  // OpFunctionCall
-        i += length;
-    }
-    return n;
 }
 
 // the text through glslang to SPIR-V; the caller holds the lock
@@ -224,56 +207,14 @@ bool Build(const std::string& text, const char* entry, Stage stage, bool optimiz
     return !spirv.empty();
 }
 
-// does the optimizer do anything in this build of glslang: a helper taking a texture and a sampler is inlined by it,
-// the call is gone from the module. Told once in the log
-void TestOptimizer() {
-    static bool done = false;
-    if (done) return;
-    done = true;
-    static const char* kTest = R"(
-Texture2D t : register(t0);
-SamplerState s : register(s0);
-float4 Helper(Texture2D tex, SamplerState ss, float2 uv) { return tex.Sample(ss, uv); }
-float4 main(float2 uv : TEXCOORD0) : SV_Target { return Helper(t, s, uv); }
-)";
-    std::vector<uint32_t> plain, optimized;
-    bool a = Build(kTest, "main", Stage::Pixel, false, plain), b = Build(kTest, "main", Stage::Pixel, true, optimized);
-    if (!a || !b) {
-        filelog::Write("vulkan", "optimizer test: the test shader did not build (%d, %d)", a, b);
-        return;
-    }
-    filelog::Write("vulkan", "optimizer test: calls without it %d, with it %d, words %zu to %zu: %s", FunctionCalls(plain),
-                   FunctionCalls(optimized), plain.size(), optimized.size(),
-                   FunctionCalls(optimized) < FunctionCalls(plain) ? "the optimizer works" : "NO EFFECT in this build");
-}
-
 }  // namespace
 
 bool Compile(const std::string& hlsl, const char* entry, Stage stage, uint64_t hash, std::vector<uint32_t>& spirv) {
     if (Load(hash, spirv)) return true;
     std::lock_guard lock(g_lock);
-    if (g_inline) TestOptimizer();
     std::string text = Adapt(hlsl);
-    // diagnosis: a helper still taking a texture or sampler after Specialize is what Mali gets wrong
-    {
-        static const std::regex left(R"(\n\w[\w<>]*[ \t]+(?!main)\w+\([^()]*(Texture|Sampler)[^()]*\)\s*\{)");
-        static int logged = 0;
-        if (std::regex_search(text, left)) {
-            LOGE("vulkan: opaque param left in %s", entry);
-            if (logged < 6) {
-                logged++;
-                filelog::Write("vulkan", "opaque param left in %s (the helper still takes a texture or a sampler):", entry);
-                filelog::Write("vulkan", "%s", text.c_str());
-            }
-        }
-    }
     if (!Build(text, entry, stage, g_inline, spirv)) return false;
-    int relaxed = RelaxedPrecision(spirv, g_precise);
-    static int told = 0;
-    if (told < 14 && (relaxed || told < 4)) {
-        told++;
-        filelog::Write("vulkan", "shader %s: %d relaxed precision decorations%s", entry, relaxed, g_precise ? ", taken off" : "");
-    }
+    if (g_precise) DropRelaxedPrecision(spirv);
     Store(hash, spirv);
     return true;
 }
