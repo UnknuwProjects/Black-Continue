@@ -1,6 +1,7 @@
 // Logs for what the host finds out, one file each in /storage/emulated/0/Black/SaveData/logs/ (the folder the other
 // logs of this port are read from). A run starts a fresh file and keeps the run before as <name>_prev.log, and a
-// file stops growing at a size: a runaway line cannot fill the storage. Only writes, changes nothing
+// file stops growing at 64 KB: a runaway line cannot fill the storage. Only for what a crash or a failed
+// shader leaves to look at. Only writes, changes nothing
 #pragma once
 
 #include <sys/stat.h>
@@ -14,7 +15,7 @@
 namespace filelog {
 
 constexpr const char* kDir = "/storage/emulated/0/Black/SaveData/logs/";
-constexpr size_t kMaxBytes = 600 * 1024;
+constexpr size_t kMaxBytes = 64 * 1024;
 
 // one line, the newline added
 __attribute__((format(printf, 2, 3))) inline void Write(const char* name, const char* fmt, ...) {
