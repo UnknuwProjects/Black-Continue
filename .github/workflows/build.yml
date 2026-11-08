@@ -54,6 +54,24 @@ jobs:
           rm -f "$key"
           sha1sum assets/default.xbe
 
+      - name: Decrypt sources
+        shell: bash
+        env:
+          SRC_KEY: ${{ secrets.SRC_KEY }}
+        run: |
+          set -euo pipefail
+          # every *.enc under src/ becomes the file without .enc (hooks.cpp.enc -> hooks.cpp)
+          mapfile -d '' files < <(find src -type f -name '*.enc' -print0)
+          if [ "${#files[@]}" -eq 0 ]; then echo "No encrypted sources found, skipping"; exit 0; fi
+          if [ -z "$SRC_KEY" ]; then echo "::error::The SRC_KEY secret is missing"; exit 1; fi
+          key="$RUNNER_TEMP/src.key"
+          printf '%s' "$SRC_KEY" > "$key"
+          for f in "${files[@]}"; do
+            echo "Decrypting $f"
+            openssl enc -d -aes-256-cbc -pbkdf2 -iter 100000 -in "$f" -out "${f%.enc}" -pass "file:$key"
+          done
+          rm -f "$key"
+
       - name: Release key
         shell: bash
         env:
@@ -92,7 +110,7 @@ jobs:
           name: Black-${{ steps.version.outputs.name }}
           path: Black-${{ steps.version.outputs.name }}.apk
           if-no-files-found: error
-     
+
       - name: Changelog
         shell: bash
         run: |
@@ -141,7 +159,7 @@ jobs:
               ci/release-notes.md > "$RUNNER_TEMP/notes-stage.md"
           sed -e "s|{{VERSION}}|$GITHUB_REF_NAME|g" -e "s|{{TAG}}|$GITHUB_REF_NAME|g" -e "s|{{APK}}|$apk|g" \
               -e "s|{{SIZE}}|$size|g" -e "s|{{SHA256}}|$sha|g" "$RUNNER_TEMP/notes-stage.md" > "$RUNNER_TEMP/release-notes.md"
-              
+
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
