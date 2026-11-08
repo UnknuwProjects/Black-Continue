@@ -115,8 +115,8 @@ constexpr uint32_t kDistances[] = {1, 2, 4, 8};
 const char* const kDistanceNames[] = {"GAME DEFAULT", "2x", "4x", "8x"};
 constexpr uint32_t kAntiAliasings[] = {0, 1, 2};
 const char* const kAntiAliasingNames[] = {"OFF", "FXAA", "SSAA 2X"};
-constexpr uint32_t kMaliFixes[] = {0, 1, 2, 3, 4};
-const char* const kMaliFixNames[] = {"OFF", "AUTO", "SHADER FIX", "NO GLOW", "SHADER FIX + NO GLOW"};
+constexpr uint32_t kMaliFixes[] = {0, 1, 2, 3, 4, 5, 6, 7};
+const char* const kMaliFixNames[] = {"OFF", "AUTO", "SHADER FIX", "NO GLOW", "SHADER FIX + NO GLOW", "FULL PRECISION", "NO GLOW (WIDE)", "ALL FIXES"};
 constexpr uint32_t kFmvScales[] = {0, 1};
 const char* const kFmvScaleNames[] = {"FILL", "4:3"};
 constexpr uint32_t kScreenFilters[] = {0, 1, 2, 3, 4, 5, 6, 7, 8};
@@ -299,7 +299,7 @@ enum RowId { kRenderResolution, kMaxFps, kVsync, kFpsCounter, kAniso, kReloadBlu
              kFog, kAntiAliasing, kHdr, kEsp, kAimbot, kTouchStick, kDynamicRes, kDynamicTarget, kDynamicMin,
              kDynamicMax, kDynamicHold, kAutoUpdate, kInfiniteMedkits, kTouchFireLook, kTouchAim, kSteadyAim, kAimView, kNoKick, kAdsCustom, kMaliFix,
              kEspHealth, kEspLabel, kHeadHeight, kEspHeight, kEspOnRed, kEspOnGreen, kEspOnBlue, kEspOffRed, kEspOffGreen,
-             kEspOffBlue, kAimAssist };
+             kEspOffBlue, kAimAssist, kEspArrows, kEspLabelShow, kEspWidth, kHeadOffset };
 
 using rows::Kind;
 using rows::Row;
@@ -384,10 +384,13 @@ constexpr Row kCheatRows[] = {
     {Kind::Value, kGodMode, "GOD MODE"},
     {Kind::Value, kInfiniteMedkits, "INFINITE MEDKITS"},
     {Kind::Value, kOneHitKill, "ONE-HIT KILL"},
-    {Kind::Value, kEsp, "ESP LINES"},
+    {Kind::Value, kEsp, "ESP STYLE"},
+    {Kind::Value, kEspArrows, "ESP ARROWS"},
     {Kind::Value, kEspHealth, "ESP HEALTH BARS"},
     {Kind::Value, kEspLabel, "ESP LABEL"},
+    {Kind::Value, kEspLabelShow, "ESP LABEL SHOW"},
     {Kind::Value, kEspHeight, "ESP BOX HEIGHT"},
+    {Kind::Value, kEspWidth, "ESP LINE WIDTH"},
     {Kind::Value, kEspOnRed, "ESP IN VIEW RED"},
     {Kind::Value, kEspOnGreen, "ESP IN VIEW GREEN"},
     {Kind::Value, kEspOnBlue, "ESP IN VIEW BLUE"},
@@ -396,6 +399,7 @@ constexpr Row kCheatRows[] = {
     {Kind::Value, kEspOffBlue, "ESP OUT OF VIEW BLUE"},
     {Kind::Value, kAimbot, "AUTO HEADSHOT (WHILE AIMING IN)"},  // esp.cpp turns the view only at a zoom above 1
     {Kind::Value, kHeadHeight, "HEADSHOT HEIGHT"},
+    {Kind::Value, kHeadOffset, "HEADSHOT OFFSET"},
     {Kind::Value, kAimAssist, "AIM ASSIST"},
     {Kind::Heading, -1, "GAME"},
     {Kind::Value, kGameSpeed, "GAME SPEED"},
@@ -482,7 +486,7 @@ bool* ToggleFlag(Settings& s, int id) {
         case kInfiniteGrenades: return &o.infinite_grenades;
         case kUnlockLevels: return &o.unlock_levels;
         case kUnlockBlackOps: return &o.unlock_black_ops;
-        case kEsp: return &o.esp;
+        case kEspArrows: return &o.esp_arrows;
         case kAimbot: return &o.aimbot;
         case kEspHealth: return &o.esp_health;
         case kDynamicRes: return &o.dynamic_resolution;
@@ -600,11 +604,14 @@ bool StepCheatRow(int id, int step, char (&text)[64]) {
     game::Options& o = game::Opt();
     switch (id) {
         case kRapidFire:
-            // off, then 2 to 4 times the rate
-            if (step) o.rapid_fire = uint32_t(StepRange(int(o.rapid_fire), 1, 4, 1, step));
+        {
+            // off, then 2, 3, 4, 6, 8 and 10 times the rate
+            static constexpr uint32_t kRates[] = {1, 2, 3, 4, 6, 8, 10};
+            StepTable(kRates, o.rapid_fire, step);
             if (o.rapid_fire <= 1) std::snprintf(text, sizeof(text), "OFF");
             else std::snprintf(text, sizeof(text), "%uX", o.rapid_fire);
             return true;
+        }
         case kAimView: {
             static constexpr uint32_t kValues[] = {0, 1};
             static const char* const kNames[] = {"ZOOM", "ADS"};
@@ -623,6 +630,31 @@ bool StepCheatRow(int id, int step, char (&text)[64]) {
             std::snprintf(text, sizeof(text), "%s", kNames[StepTable(kValues, o.aim_assist, step)]);
             return true;
         }
+        case kEsp: {
+            static constexpr uint32_t kValues[] = {0, 1, 2, 3};
+            static const char* const kNames[] = {"OFF", "BOX", "LINE", "BOX + LINE"};
+            std::snprintf(text, sizeof(text), "%s", kNames[StepTable(kValues, o.esp_style, step)]);
+            return true;
+        }
+        case kEspLabelShow: {
+            static constexpr uint32_t kValues[] = {0, 1, 2};
+            static const char* const kNames[] = {"AUTO", "ALWAYS", "WHEN HIT"};
+            std::snprintf(text, sizeof(text), "%s", kNames[StepTable(kValues, o.esp_label_show, step)]);
+            return true;
+        }
+        case kEspWidth:
+            // 0.0 (nothing) to 3.0 lines of the 480 frame in steps of a tenth
+            if (step) o.esp_width = uint32_t(StepRange(int(o.esp_width), 0, 30, 1, step));
+            std::snprintf(text, sizeof(text), o.esp_width == 8 ? "%.1f (DEFAULT)" : "%.1f", double(o.esp_width) / 10.0);
+            return true;
+        case kHeadOffset: {
+            // 30 centimetres left to 30 right of the aim point, in steps of one
+            if (step) o.head_offset = uint32_t(StepRange(int(o.head_offset), 0, 60, 1, step));
+            int cm = int(o.head_offset) - 30;
+            if (!cm) std::snprintf(text, sizeof(text), "CENTER (DEFAULT)");
+            else std::snprintf(text, sizeof(text), "%d CM %s", cm < 0 ? -cm : cm, cm < 0 ? "LEFT" : "RIGHT");
+            return true;
+        }
         case kEspHeight:
             // 1.00 to 2.50 metres in steps of 5 centimetres
             if (step) o.esp_height = uint32_t(StepRange(int(o.esp_height), 100, 250, 5, step));
@@ -635,7 +667,7 @@ bool StepCheatRow(int id, int step, char (&text)[64]) {
             return true;
         }
         case kHeadHeight:
-            // 40% to 100% of the box's height in steps of 5
+            // 40% to 100% of 1.80 m in steps of 5
             if (step) o.head_height = uint32_t(StepRange(int(o.head_height), 40, 100, 5, step));
             std::snprintf(text, sizeof(text), o.head_height == 90 ? "%u%% (DEFAULT)" : "%u%%", o.head_height);
             return true;
@@ -862,7 +894,11 @@ void RestoreDefaults(int page) {
         o.infinite_grenades = none.infinite_grenades;
         o.unlock_levels = none.unlock_levels;
         o.unlock_black_ops = none.unlock_black_ops;
-        o.esp = none.esp;
+        o.esp_style = none.esp_style;
+        o.esp_arrows = none.esp_arrows;
+        o.esp_label_show = none.esp_label_show;
+        o.esp_width = none.esp_width;
+        o.head_offset = none.head_offset;
         o.aimbot = none.aimbot;
         o.aim_assist = none.aim_assist;
         o.esp_health = none.esp_health;
@@ -905,7 +941,11 @@ void RestoreDefaults(int page) {
     o.infinite_grenades = keep.infinite_grenades;
     o.unlock_levels = keep.unlock_levels;
     o.unlock_black_ops = keep.unlock_black_ops;
-    o.esp = keep.esp;
+    o.esp_style = keep.esp_style;
+    o.esp_arrows = keep.esp_arrows;
+    o.esp_label_show = keep.esp_label_show;
+    o.esp_width = keep.esp_width;
+    o.head_offset = keep.head_offset;
     o.aimbot = keep.aimbot;
     o.aim_assist = keep.aim_assist;
     o.esp_health = keep.esp_health;
