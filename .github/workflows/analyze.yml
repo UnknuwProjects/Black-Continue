@@ -5,7 +5,8 @@
 # derived from the game.
 #
 # A target is sub_XXXXXXXX (the functions that call it, found by name) or 0xXXXXXX (the function that holds the
-# address, found from the function table). Several apart by spaces.
+# address, found from the function table). Several apart by spaces. text:WORDS finds a text in default.xbe (ASCII or
+# UTF-16, any case, _ is a space) and the code lines that use its address.
 #
 # Secret: XBE_KEY, the same one build.yml uses.
 name: Analyze
@@ -14,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: "0xXXXXXX (function holding it), sub_XXXXXXXX (functions calling it), @sub_XXXXXXXX (its call sites); :N lines"
+        description: "0xXXXXXX (function holding it), sub_XXXXXXXX (functions calling it), @sub_XXXXXXXX (its call sites), text:WORDS (a text and who uses it); :N lines"
         default: "@sub_001DAFF0:22"
         required: true
 
@@ -70,11 +71,11 @@ jobs:
           TARGETS: ${{ inputs.target }}
         run: |
           cat > "$RUNNER_TEMP/find.py" <<'PY'
-          import collections, pathlib, re, sys
+          import bisect, collections, pathlib, re, sys
 
           targets, lines_for = [], {}
           for t in sys.argv[1].replace(",", " ").split():
-              m = re.fullmatch(r"(@?sub_[0-9A-Fa-f]{6,8}|0x[0-9A-Fa-f]{1,8})(?::(\d{1,4}))?", t)
+              m = re.fullmatch(r"(@?sub_[0-9A-Fa-f]{6,8}|0x[0-9A-Fa-f]{1,8}|text:[^\s,]{3,60})(?::(\d{1,4}))?", t)
               if not m:
                   sys.exit("not a function name or an address: " + t)
               targets.append(m.group(1))
@@ -129,7 +130,73 @@ jobs:
                   size = defs[c][2] - defs[c][1] if c in defs else 0
                   out.append(f"   {c} x{n}, {called[c]} places, {size} lines")
 
+          # text:WORDS. The XBE's sections say where each byte of the file sits in memory; the code names an address as
+          # 0xXXXXXXXX in its instruction comments, so a string's address finds the lines that use it
+          def xbe_data():
+              d = pathlib.Path("assets/default.xbe").read_bytes()
+              u32 = lambda o: int.from_bytes(d[o:o + 4], "little")
+              table = u32(0x120) - u32(0x104)
+              # virtual address, file offset, size of each section
+              return d, [(u32(table + i * 0x38 + 4), u32(table + i * 0x38 + 12), u32(table + i * 0x38 + 16))
+                         for i in range(u32(0x11C))]
+
+          def find_text(word, limit=6):
+              d, secs = xbe_data()
+              low, found = d.lower(), {}  # start address: (text, kind)
+              for kind, needle in (("ascii", word.lower().encode()), ("utf16", word.lower().encode("utf-16-le"))):
+                  at = low.find(needle)
+                  while at >= 0 and len(found) < limit:
+                      s = at
+                      if kind == "ascii":
+                          while s > 0 and at - s < 300 and d[s - 1] != 0:
+                              s -= 1
+                          e = d.find(b"\0", at)
+                          text = d[s:e].decode("latin-1")
+                      else:
+                          while s >= 2 and at - s < 600 and d[s - 2:s] != b"\0\0":
+                              s -= 2
+                          e = at
+                          while e + 2 <= len(d) and d[e:e + 2] != b"\0\0" and e - s < 600:
+                              e += 2
+                          text = d[s:e].decode("utf-16-le", errors="replace")
+                      for va, raw, size in secs:
+                          if raw <= s < raw + size:
+                              found.setdefault(va + s - raw, (text[:100], kind))
+                              break
+                      at = low.find(needle, at + len(needle))
+              return found
+
+          def users(addresses):
+              wanted = {f"0x{a:08X}": a for a in addresses}
+              seen = collections.defaultdict(list)  # address: (function, file, line, instruction)
+              pat = re.compile(r"0x[0-9A-F]{8}")
+              for path, lines in files.items():
+                  starts = [i for i, l in enumerate(lines) if l and not l[0].isspace() and start.match(l)]
+                  for i, l in enumerate(lines):
+                      if not l.startswith("\t// "):
+                          continue
+                      for h in pat.findall(l):
+                          if h in wanted:
+                              k = bisect.bisect_right(starts, i) - 1
+                              holder = start.match(lines[starts[k]]).group(1) if k >= 0 else "?"
+                              seen[wanted[h]].append((holder, path.name, i + 1, l.strip()))
+              return seen
+
           for t in targets:
+              if t.startswith("text:"):
+                  found = find_text(t[5:].replace("_", " "))
+                  out.append(f"## {t}: {len(found)} strings in default.xbe")
+                  if not found:
+                      continue
+                  seen = users(found)
+                  for a, (text, kind) in sorted(found.items()):
+                      sites = seen.get(a, [])
+                      out.append(f"-- 0x{a:08X} {kind} \"{text}\": {len(sites)} code lines name it")
+                      for holder, pname, n, ins in sites[:8]:
+                          out.append(f"   in {holder} ({pname}:{n}): {ins}")
+                      if len(sites) > 8:
+                          out.append(f"   ... {len(sites) - 8} more")
+                  continue
               if t.startswith("@"):
                   # the places that call it, as the last instructions before each call (the pushed arguments show)
                   name, keep, sites = t[1:], lines_for.get(t, 24), []
