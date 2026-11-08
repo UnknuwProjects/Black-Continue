@@ -6,7 +6,9 @@
 #
 # A target is sub_XXXXXXXX (the functions that call it, found by name) or 0xXXXXXX (the function that holds the
 # address, found from the function table). Several apart by spaces. text:WORDS finds a text in default.xbe (ASCII or
-# UTF-16, any case, _ is a space) and the code lines that use its address.
+# UTF-16, any case, _ is a space) and the code lines that use its address. ptr:NAME does the same but also finds the
+# pointers to the text in the data (a table of names) and prints the table around each, then the code that uses it
+# (here _ stays an underscore: for names such as FE_SOMETHING).
 #
 # Secret: XBE_KEY, the same one build.yml uses.
 name: Analyze
@@ -15,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: "0xXXXXXX (function holding it), sub_XXXXXXXX (functions calling it), @sub_XXXXXXXX (its call sites), text:WORDS (a text and who uses it); :N lines"
+        description: "0xXXXXXX (function holding it), sub_XXXXXXXX (functions calling it), @sub_XXXXXXXX (its call sites), text:WORDS (a text and who uses it), ptr:NAME (data pointers to a text); :N lines"
         default: "@sub_001DAFF0:22"
         required: true
 
@@ -75,7 +77,7 @@ jobs:
 
           targets, lines_for = [], {}
           for t in sys.argv[1].replace(",", " ").split():
-              m = re.fullmatch(r"(@?sub_[0-9A-Fa-f]{6,8}|0x[0-9A-Fa-f]{1,8}|text:[^\s,]{3,60})(?::(\d{1,4}))?", t)
+              m = re.fullmatch(r"(@?sub_[0-9A-Fa-f]{6,8}|0x[0-9A-Fa-f]{1,8}|(?:text|ptr):[^\s,]{3,60})(?::(\d{1,4}))?", t)
               if not m:
                   sys.exit("not a function name or an address: " + t)
               targets.append(m.group(1))
@@ -182,7 +184,60 @@ jobs:
                               seen[wanted[h]].append((holder, path.name, i + 1, l.strip()))
               return seen
 
+          # ptr:NAME. A text named only through a table (the code adds an index to the table's address) has no code line
+          # of its own, so: find 4-byte values equal to the text's address in the data, show the dwords around each (the
+          # ones that point at a text are shown as that text) and the code lines naming any address near the pointer
+          def cstring(d, secs, va):
+              for sva, raw, size in secs:
+                  if sva <= va < sva + size:
+                      o = raw + va - sva
+                      e = d.find(b"\0", o, o + 80)
+                      body = d[o:e] if e > o else b""
+                      if len(body) >= 3 and all(32 <= c < 127 for c in body):
+                          return body.decode()
+                      return None
+              return None
+
+          def find_pointers(d, secs, address):
+              needle, hits = address.to_bytes(4, "little"), []
+              for sva, raw, size in secs:
+                  at = d.find(needle, raw, raw + size)
+                  while at >= 0:
+                      if (at - raw) % 4 == 0:
+                          hits.append(sva + at - raw)
+                      at = d.find(needle, at + 1, raw + size)
+              return hits
+
+          def show_pointers(word):
+              d, secs = xbe_data()
+              found = find_text(word, 4)
+              out.append(f"## ptr:{word}: {len(found)} strings in default.xbe")
+              for a, (text, kind) in sorted(found.items()):
+                  if kind != "ascii":
+                      continue
+                  hits = find_pointers(d, secs, a)
+                  out.append(f"-- 0x{a:08X} \"{text}\": {len(hits)} pointers in the data")
+                  for p in hits[:4]:
+                      out.append(f"   pointer at 0x{p:08X}:")
+                      for q in range(p - 0x18, p + 0x1C, 4):
+                          for sva, raw, size in secs:
+                              if sva <= q < sva + size:
+                                  v = int.from_bytes(d[raw + q - sva:raw + q - sva + 4], "little")
+                                  s = cstring(d, secs, v)
+                                  out.append(f"   {'>' if q == p else ' '} 0x{q:08X}: 0x{v:08X}" + (f" \"{s[:50]}\"" if s else ""))
+                                  break
+                      near = users(range(p - 0x200, p + 0x40, 4))
+                      sites = sorted((x, h) for x, hs in near.items() for h in hs)
+                      out.append(f"   code lines naming 0x{p - 0x200:08X}..0x{p + 0x3C:08X}: {len(sites)}")
+                      for x, (holder, pname, n, ins) in sites[:10]:
+                          out.append(f"   [{x - p:+#x}] in {holder} ({pname}:{n}): {ins}")
+                      if len(sites) > 10:
+                          out.append(f"   ... {len(sites) - 10} more")
+
           for t in targets:
+              if t.startswith("ptr:"):
+                  show_pointers(t[4:])
+                  continue
               if t.startswith("text:"):
                   found = find_text(t[5:].replace("_", " "))
                   out.append(f"## {t}: {len(found)} strings in default.xbe")
