@@ -16,7 +16,6 @@
 #include <fstream>
 #include <map>
 #include <mutex>
-#include <set>
 #include <unordered_map>
 #include <vector>
 
@@ -2886,32 +2885,17 @@ bool VulkanBackend::GlowComposite(const State& s, const DrawTextures& stages) co
         return false;
     for (int i = 0; i < 4; i++) {
         if (!stages.gw[i] || stages.gw[i] * 2 > draw_rt_->gw) continue;
-        // each kind once in the log, to tell what it took
-        static std::set<uint64_t> seen;
-        uint64_t kind = uint64_t(stages.gw[i]) << 32 | SimpleState(s, kMSrcBlend) << 16 | draw_rt_->gw;
-        if (seen.size() < 16 && seen.insert(kind).second)
-        {
-            LOGR("vulkan: bloom off skips %u wide onto %u wide, src blend %u", stages.gw[i], draw_rt_->gw,
-                 SimpleState(s, kMSrcBlend));
-            filelog::Write("vulkan", "glow composite: %u wide onto %u wide, src blend %u", stages.gw[i], draw_rt_->gw,
-                           SimpleState(s, kMSrcBlend));
-        }
         return true;
     }
     return false;
 }
 
 // experimental (MALI FIX, the wide drops): any blended draw onto a full size target that reads a smaller render target,
-// whatever its blend, which takes in the glow's composites the one above does not know. Each kind once in the log
+// whatever its blend, which takes in the glow's composites the one above does not know
 bool VulkanBackend::GlowWide(const State& s, const DrawTextures& stages) const {
     if (!draw_rt_ || draw_rt_->gw < guest_w_ || !SimpleState(s, kMBlendEnable)) return false;
     for (int i = 0; i < 4; i++) {
         if (!stages.gw[i] || stages.gw[i] >= draw_rt_->gw) continue;
-        static std::set<uint64_t> seen;
-        uint64_t kind = uint64_t(stages.gw[i]) << 32 | SimpleState(s, kMSrcBlend) << 16 | SimpleState(s, kMDestBlend);
-        if (seen.size() < 24 && seen.insert(kind).second)
-            filelog::Write("vulkan", "wide drop: %u wide onto %u wide, src blend %u, dest blend %u", stages.gw[i],
-                           draw_rt_->gw, SimpleState(s, kMSrcBlend), SimpleState(s, kMDestBlend));
         return true;
     }
     return false;
