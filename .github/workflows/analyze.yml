@@ -105,7 +105,13 @@ jobs:
 
           def show(name, why):
               if name not in defs:
-                  out.append(f"== {name}: {why}: no definition found")
+                  # not written the way the search expects: where the name is, and the first places as they are
+                  places = [(p, i) for p, ls in files.items() for i, l in enumerate(ls) if name in l]
+                  out.append(f"== {name}: {why}: no definition of the usual form, {len(places)} lines have the name: " +
+                             " ".join(f"{p.name}:{i + 1}" for p, i in places[:15]))
+                  for p, i in places[:3]:
+                      out.append(f"-- {p.name}:{i + 1}")
+                      out.extend(files[p][max(0, i - 2):i + 60])
                   return
               path, first, last = defs[name]
               lines = files[path][first:last]
