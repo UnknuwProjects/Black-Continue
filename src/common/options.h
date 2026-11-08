@@ -23,7 +23,8 @@ struct Options {
     bool fog = true;
     uint32_t anti_aliasing = 0;  // 0 off, 1 FXAA as the frame goes onto the screen, 2 SSAA: twice the resolution
     // ARM Mali GPUs (MediaTek too) draw the glow passes saturated: 0 off, 1 auto (the shader fix on Mali only),
-    // 2 shader fix, 3 glow passes dropped, 4 both; a change applies at once (native/vulkan.cpp)
+    // 2 shader fix, 3 glow passes dropped, 4 both, 5 full precision shaders, 6 every glow-like pass dropped, 7 the shader
+    // fix, full precision and the wide drop; a change applies at once (native/vulkan.cpp)
     uint32_t mali_fix = 1;
     bool hdr = false;  // a tone map that brings back the colours the console's overbright look burns out
     uint32_t draw_distance = 1;  // times the game's LOD and draw distances
@@ -63,15 +64,19 @@ struct Options {
     bool infinite_medkits = false;  // cheat: using a medkit keeps the count (src/game/weapons.cpp)
     bool unlock_levels = false;  // cheat: every mission open on every difficulty, the save is left as it is
     bool unlock_black_ops = false;  // cheat: Black Ops open on the missions open on another difficulty, the same
-    bool esp = false;  // cheat: a line from the bottom of the screen and a box to each living enemy
+    uint32_t esp_style = 0;  // cheat: what is drawn on each living enemy in view: 0 off, 1 box, 2 line from the bottom of the screen, 3 both
+    bool esp_arrows = false;  // cheat: an arrow on a ring round the middle towards each enemy out of the view
     bool aimbot = false;  // cheat, AUTO HEADSHOT: aiming in turns the view to the head of the enemy nearest the crosshair
     uint32_t aim_assist = 0;  // cheat: 0 off, 1 to 3 a pull of the view to an enemy near the crosshair while firing or aiming
-    uint32_t head_height = 90;  // percent of the ESP box height: where AUTO HEADSHOT turns the view to
-    uint32_t esp_label = 0;  // the ESP's plate over each enemy, drawn by ImGui: 0 off, 1 health, 2 distance, 3 both
-    bool esp_health = true;  // the ESP's health bar over each enemy
+    uint32_t head_height = 90;  // percent of 1.80 m, the height AUTO HEADSHOT turns the view to (not the ESP box's)
+    uint32_t head_offset = 30;  // centimetres plus 30: 0 is 30 left on the screen, 30 none, 60 is 30 right
+    uint32_t esp_label = 0;  // the plate over each enemy in view, drawn by ImGui: 0 off, 1 health, 2 distance, 3 both
+    uint32_t esp_label_show = 0;  // when the plate shows: 0 auto (always with a box or line, else after a hit), 1 always, 2 after a hit
+    bool esp_health = false;  // the health bar over each enemy in view
+    uint32_t esp_width = 8;  // tenths of a line of the 480 frame: the thickness of the ESP's box and line, 0 to 30
     uint32_t esp_height = 180;  // centimetres: the ESP box's height, and what the head and body points are taken from
-    uint32_t esp_on_color = 0x3CFF3C;   // 0xRRGGBB, the lines and boxes of the enemies in the view
-    uint32_t esp_off_color = 0xFF3C3C;  // the arrows to the enemies out of it
+    uint32_t esp_on_color = 0xFFFFFF;   // 0xRRGGBB, the lines and boxes of the enemies in the view
+    uint32_t esp_off_color = 0xFF0000;  // the arrows to the enemies out of it
     std::map<std::string, std::string> keys;  // action id to key names, absent is the default
 };
 Options& Opt();
