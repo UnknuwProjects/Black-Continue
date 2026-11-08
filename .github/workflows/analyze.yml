@@ -1,7 +1,11 @@
 # Looks things up in the recompiled game code, which only exists on a runner (generated/ is gitignored and made from
-# default.xbe). Run by hand: Actions, Analyze, Run workflow. It recompiles (no Gradle, no NDK) and prints the callers
-# of one function: each caller's body and the functions it calls. A few hundred lines, nothing more, in the job log
-# and in analysis.txt. The generated code itself is never uploaded: it is derived from the game.
+# default.xbe). Run by hand: Actions, Analyze, Run workflow. It recompiles (no Gradle, no NDK) and prints, for each
+# target, the function's body and what it calls (with how many places call each of those, and how long each is). A few
+# hundred lines, nothing more, in the job log and in analysis.txt. The generated code itself is never uploaded: it is
+# derived from the game.
+#
+# A target is sub_XXXXXXXX (the functions that call it, found by name) or 0xXXXXXX (the function that holds the
+# address, found from the function table). Several apart by spaces.
 #
 # Secret: XBE_KEY, the same one build.yml uses.
 name: Analyze
@@ -10,8 +14,8 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: "function to find the callers of"
-        default: "sub_001E74B0"
+        description: "sub_XXXXXXXX or 0xXXXXXX, several apart by spaces"
+        default: "0x1E285F 0x1DBAAB 0x1DC4D4"
         required: true
 
 permissions:
@@ -60,64 +64,89 @@ jobs:
           "%TOOLS%\xbe_recomp.exe" config\game.toml --xdk "%SDK%\xdk" >nul
           if errorlevel 1 exit /b 1
 
-      - name: Callers
+      - name: Look up
         shell: bash
         env:
-          TARGET: ${{ inputs.target }}
+          TARGETS: ${{ inputs.target }}
         run: |
           cat > "$RUNNER_TEMP/find.py" <<'PY'
           import collections, pathlib, re, sys
 
-          target = sys.argv[1]
-          if not re.fullmatch(r"sub_[0-9A-Fa-f]{6,8}", target):
-              sys.exit("not a function name: " + target)
+          targets = sys.argv[1].replace(",", " ").split()
+          for t in targets:
+              if not re.fullmatch(r"sub_[0-9A-Fa-f]{6,8}|0x[0-9A-Fa-f]{1,8}", t):
+                  sys.exit("not a function name or an address: " + t)
           root = pathlib.Path("generated/game")
-          # a definition starts at column 0 and names a sub_; a call is an indented line with the target in it
+          TABLE = "x86_func_mapping.cpp"  # every function's address and name: not a caller of anything
+          # a definition starts at column 0 and names a sub_; a call is an indented line with a sub_ in it
           start = re.compile(r"^[A-Za-z_][^;]*\b(sub_[0-9A-Fa-f]{6,8})\s*\(")
           call = re.compile(r"\bsub_[0-9A-Fa-f]{6,8}\b")
-          out, shown = [], collections.OrderedDict()
-          CAP, BODY = 600, 160
+          BODY, CAP = 120, 900
 
-          def emit(text):
-              out.append(text)
-
+          defs = {}  # name: (path, first, last)
+          files = {}
+          called = collections.Counter()  # in how many lines each function is called
           for path in sorted(p for p in root.rglob("*") if p.suffix in (".cpp", ".h", ".inc", ".c")):
+              if path.name == TABLE:
+                  continue
               lines = path.read_text(errors="replace").split("\n")
+              files[path] = lines
               starts = [i for i, l in enumerate(lines) if l and not l[0].isspace() and start.match(l)]
-              for i, l in enumerate(lines):
-                  if not l[:1].isspace() or target not in l:
+              for k, s in enumerate(starts):
+                  defs.setdefault(start.match(lines[s]).group(1), (path, s, starts[k + 1] if k + 1 < len(starts) else len(lines)))
+              for l in lines:
+                  if l[:1].isspace():
+                      for c in set(call.findall(l)):
+                          called[c] += 1
+
+          table = sorted((int(a, 16), n) for a, n in re.findall(
+              r"\{0x([0-9A-Fa-f]+)u,\s*(sub_[0-9A-Fa-f]+)\}", (root / TABLE).read_text(errors="replace")))
+          out = []
+
+          def show(name, why):
+              if name not in defs:
+                  out.append(f"== {name}: {why}: no definition found")
+                  return
+              path, first, last = defs[name]
+              lines = files[path][first:last]
+              out.append(f"== {name} in {path.name}:{first + 1}, {len(lines)} lines, called in {called[name]} places: {why}")
+              out.extend(lines[:BODY])
+              if len(lines) > BODY:
+                  out.append(f"... {len(lines) - BODY} more lines")
+              callees = collections.Counter(c for c in call.findall("\n".join(lines)) if c != name)
+              out.append("-- calls (name, times here, places that call it, its lines):")
+              for c, n in sorted(callees.items(), key=lambda x: -called[x[0]]):
+                  size = defs[c][2] - defs[c][1] if c in defs else 0
+                  out.append(f"   {c} x{n}, {called[c]} places, {size} lines")
+
+          for t in targets:
+              if t.startswith("0x"):
+                  address = int(t, 16)
+                  before = [e for e in table if e[0] <= address]
+                  if not before:
+                      out.append(f"== {t}: no function starts before it")
                       continue
-                  first = max([s for s in starts if s <= i], default=None)
-                  if first is None:
-                      emit(f"== {path.name}:{i + 1} (no function found)")
-                      emit("\n".join(lines[max(0, i - 30):i + 30]))
-                      continue
-                  last = min([s for s in starts if s > first], default=len(lines))
-                  key = (path.name, first)
-                  if key in shown:
-                      shown[key].append(i + 1)
-                      continue
-                  shown[key] = [i + 1]
-                  name = start.match(lines[first]).group(1)
-                  body = lines[first:last]
-                  emit(f"== {name} in {path.name}:{first + 1}, {len(body)} lines, calls {target} at line {i + 1}")
-                  if len(body) <= BODY:
-                      emit("\n".join(body))
-                  else:
-                      emit(f"(long: the 60 lines round the call)")
-                      emit("\n".join(lines[max(first, i - 30):min(last, i + 30)]))
-                  callees = collections.Counter(c for c in call.findall("\n".join(body)) if c not in (name, target))
-                  emit("-- calls: " + " ".join(f"{c}x{n}" if n > 1 else c for c, n in sorted(callees.items())))
-          emit("")
-          emit(f"{len(shown)} functions call {target}: " + ", ".join(f"{n}:{p}" for (n, _), p in shown.items()))
-          text = "\n".join(out).split("\n")
-          if len(text) > CAP:
-              text = text[:CAP] + [f"... cut at {CAP} lines"]
+                  # the last starts: a piece of a function can have a name of its own
+                  out.append(f"## {t}: the starts just before it: " + " ".join(f"{a:#X}={n}" for a, n in before[-3:]))
+                  show(before[-1][1], f"holds {t}")
+              else:
+                  hits = collections.OrderedDict()
+                  for path, lines in files.items():
+                      starts = [i for i, l in enumerate(lines) if l and not l[0].isspace() and start.match(l)]
+                      for i, l in enumerate(lines):
+                          if l[:1].isspace() and t in l:
+                              first = max([s for s in starts if s <= i], default=None)
+                              if first is not None:
+                                  hits.setdefault(start.match(lines[first]).group(1), i + 1)
+                  out.append(f"## {t}: {len(hits)} functions call it: " + " ".join(hits))
+                  for name in hits:
+                      show(name, f"calls {t}")
+          text = out if len(out) <= CAP else out[:CAP] + [f"... cut at {CAP} lines"]
           result = "\n".join(text)
           pathlib.Path("analysis.txt").write_text(result)
           print(result)
           PY
-          python -I "$RUNNER_TEMP/find.py" "$TARGET"
+          python -I "$RUNNER_TEMP/find.py" "$TARGETS"
 
       - uses: actions/upload-artifact@v5
         with:
