@@ -130,6 +130,7 @@ constexpr Entry kEntries[] = {
     {"LOCK TARGET", {{}, {}, {}, {}, u"Target kunci"}},
     {"OBJECTIVE LOG MARK", {{}, {}, {}, {}, u"Tandai log objektif"}},
     {"OBJECTIVE LOG RESET", {{}, {}, {}, {}, u"Reset log objektif"}},
+    {"OBJECTIVE LOG DUMP", {{}, {}, {}, {}, u"Dump log objektif"}},
     {"ESP IN VIEW RED", {{}, {}, {}, {}, u"ESP di layar: merah"}},
     {"ESP IN VIEW GREEN", {{}, {}, {}, {}, u"ESP di layar: hijau"}},
     {"ESP IN VIEW BLUE", {{}, {}, {}, {}, u"ESP di layar: biru"}},
