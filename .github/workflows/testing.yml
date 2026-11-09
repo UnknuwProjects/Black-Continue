@@ -107,8 +107,8 @@ jobs:
         shell: bash
         run: mv app/build/outputs/apk/release/app-release.apk "Black-${{ steps.version.outputs.name }}.apk"
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
-          name: Black-${{ steps.version.outputs.name }}
           path: Black-${{ steps.version.outputs.name }}.apk
+          archive: false          # langsung .apk, tanpa zip (nama artifact = nama file)
           if-no-files-found: error
