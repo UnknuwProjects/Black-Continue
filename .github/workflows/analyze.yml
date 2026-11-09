@@ -8,7 +8,9 @@
 # address, found from the function table). Several apart by spaces. text:WORDS finds a text in default.xbe (ASCII or
 # UTF-16, any case, _ is a space) and the code lines that use its address. ptr:NAME does the same but also finds the
 # pointers to the text in the data (a table of names) and prints the table around each, then the code that uses it
-# (here _ stays an underscore: for names such as FE_SOMETHING).
+# (here _ stays an underscore: for names such as FE_SOMETHING). range:0xFROM-0xTO prints every code line that names an
+# address in that range, the addresses used most and the functions that use them (for a table of texts the code reaches
+# from its start plus an index, which no single text address finds).
 #
 # Secret: XBE_KEY, the same one build.yml uses.
 name: Analyze
@@ -17,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: "0xXXXXXX (function holding it), sub_XXXXXXXX (functions calling it), @sub_XXXXXXXX (its call sites), text:WORDS (a text and who uses it), ptr:NAME (data pointers to a text); :N lines"
+        description: "0xXXXXXX (function holding it), sub_XXXXXXXX (functions calling it), @sub_XXXXXXXX (its call sites), text:WORDS (a text and who uses it), ptr:NAME (data pointers to a text), range:0xFROM-0xTO (code that uses an address in it); :N lines"
         default: "@sub_001DAFF0:22"
         required: true
 
@@ -77,7 +79,7 @@ jobs:
 
           targets, lines_for = [], {}
           for t in sys.argv[1].replace(",", " ").split():
-              m = re.fullmatch(r"(@?sub_[0-9A-Fa-f]{6,8}|0x[0-9A-Fa-f]{1,8}|(?:text|ptr):[^\s,]{3,60})(?::(\d{1,4}))?", t)
+              m = re.fullmatch(r"(@?sub_[0-9A-Fa-f]{6,8}|0x[0-9A-Fa-f]{1,8}|(?:text|ptr):[^\s,]{3,60}|range:0x[0-9A-Fa-f]{1,8}-0x[0-9A-Fa-f]{1,8})(?::(\d{1,4}))?", t)
               if not m:
                   sys.exit("not a function name or an address: " + t)
               targets.append(m.group(1))
@@ -234,7 +236,43 @@ jobs:
                       if len(sites) > 10:
                           out.append(f"   ... {len(sites) - 10} more")
 
+          # range:0xFROM-0xTO. Every code line that names an address from FROM to TO, as 0xXXXXXXXX in its comment
+          def show_range(t, keep):
+              lo, hi = (int(x, 16) for x in t[6:].split("-"))
+              pat = re.compile(r"0x([0-9A-F]{8})")
+              rows = []  # value, function, file, line, instruction
+              for path, lines in files.items():
+                  starts = [i for i, l in enumerate(lines) if l and not l[0].isspace() and start.match(l)]
+                  for i, l in enumerate(lines):
+                      if not l.startswith("\t// "):
+                          continue
+                      for h in pat.findall(l):
+                          v = int(h, 16)
+                          if lo <= v <= hi:
+                              k = bisect.bisect_right(starts, i) - 1
+                              holder = start.match(lines[starts[k]]).group(1) if k >= 0 else "?"
+                              rows.append((v, holder, path.name, i + 1, l.strip()[:120]))
+              out.append(f"## {t}: {len(rows)} code lines name an address in it")
+              if not rows:
+                  return
+              by_value = collections.Counter(r[0] for r in rows)
+              out.append("-- addresses used most (address x lines): " +
+                         " ".join(f"0x{v:08X}x{n}" for v, n in by_value.most_common(20)))
+              by_holder = collections.Counter(r[1] for r in rows)
+              out.append("-- functions that use them (name: lines here, places that call it, its lines):")
+              for name, n in by_holder.most_common(30):
+                  size = defs[name][2] - defs[name][1] if name in defs else 0
+                  out.append(f"   {name}: {n} lines, {called[name]} places call it, {size} lines")
+              out.append("-- the lines, lowest address first:")
+              for v, holder, pname, n, ins in sorted(rows)[:keep]:
+                  out.append(f"   0x{v:08X} in {holder} ({pname}:{n}): {ins}")
+              if len(rows) > keep:
+                  out.append(f"   ... {len(rows) - keep} more")
+
           for t in targets:
+              if t.startswith("range:"):
+                  show_range(t, lines_for.get(t, 40))
+                  continue
               if t.startswith("ptr:"):
                   show_pointers(t[4:])
                   continue
