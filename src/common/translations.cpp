@@ -126,6 +126,7 @@ constexpr Entry kEntries[] = {
     {"HEADSHOT OFFSET", {{}, {}, {}, {}, u"Geser headshot"}},
     {"ESP BOX HEIGHT", {{}, {}, {}, {}, u"Tinggi kotak ESP"}},
     {"HEADSHOT HEIGHT", {{}, {}, {}, {}, u"Tinggi headshot"}},
+    {"OBJECTIVE ESP", {{}, {}, {}, {}, u"ESP objektif misi"}},
     {"ESP BOX FIT", {{}, {}, {}, {}, u"Kotak ESP ikut postur"}},
     {"LOCK TARGET", {{}, {}, {}, {}, u"Target kunci"}},
     {"OBJECTIVE LOG MARK", {{}, {}, {}, {}, u"Tandai log objektif"}},
