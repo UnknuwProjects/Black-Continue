@@ -77,6 +77,7 @@ struct Options {
     bool esp_health = false;  // the health bar over each enemy in view
     uint32_t esp_width = 8;  // tenths of a line of the 480 frame: the thickness of the ESP's box and line, 0 to 30
     uint32_t esp_height = 180;  // centimetres: the ESP box's height
+    bool objective_esp = false;  // cheat, OBJECTIVE ESP: a marker, its distance and an edge arrow for each mission objective not yet done (src/game/esp.cpp)
     bool esp_fit = false;  // the box's top follows the enemy's stance (standing, crouching) as the hitboxes show it
     uint32_t esp_on_color = 0xFFFFFF;   // 0xRRGGBB, the lines and boxes of the enemies in the view
     uint32_t esp_off_color = 0xFF0000;  // the arrows to the enemies out of it
