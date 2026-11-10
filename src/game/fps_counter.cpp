@@ -141,7 +141,7 @@ void DrawOverlay(X86Context& ctx, uint8_t*) {
     std::optional<float> slide = title ? LegendSlide(*title) : std::nullopt;
     bool watermark = slide.has_value();
     const game::Options& opt = game::Opt();
-    bool esp = opt.esp_style || opt.esp_arrows || opt.esp_health || opt.esp_label;
+    bool esp = opt.esp_style || opt.esp_arrows || opt.esp_health || opt.esp_label || opt.objective_esp;
     if (!(fps || watermark || esp) || !font || !(h > 0)) return;
     View view{h / 480, w / h / game::Aspect()};
     float& width = G<float>(font + kFontScale);
