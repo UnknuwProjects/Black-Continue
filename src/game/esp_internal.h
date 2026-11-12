@@ -59,6 +59,7 @@ struct NodePass {
     std::vector<BodyHit> hits;
     uint32_t hit_over = 0;  // candidates left out for the cap
     uint32_t chunks = 0, unread = 0;  // reads of the walk, and the ones that failed
+    uint32_t kind_far = 0;  // headers of a body's kind whose second word is not 0 (a body's is 0)
     uint32_t kinds[257] = {};  // nodes met by kind, the last for 256 and up
     std::unordered_map<uint32_t, BigKind> big;  // the kinds of 256 and up
 };
