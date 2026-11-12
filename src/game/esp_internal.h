@@ -58,6 +58,7 @@ struct NodePass {
     std::vector<ObjRef> objs;
     std::vector<BodyHit> hits;
     uint32_t hit_over = 0;  // candidates left out for the cap
+    uint32_t chunks = 0, unread = 0;  // reads of the walk, and the ones that failed
     uint32_t kinds[257] = {};  // nodes met by kind, the last for 256 and up
     std::unordered_map<uint32_t, BigKind> big;  // the kinds of 256 and up
 };
@@ -75,6 +76,7 @@ struct Dots {
     std::vector<Body> bodies;  // the bodies of the walk before, read again every kBodyEvery
     std::string body_summary;  // their count by kind at the walk before
     bool bodies_seen = false;
+    uint32_t walks = 0;  // walks of the bodies since the level began (the first lines W)
     std::chrono::steady_clock::time_point next_body{};
     std::unordered_map<uint32_t, uint32_t> counts;  // objects by kind at the walk before
     bool scanning = false;
