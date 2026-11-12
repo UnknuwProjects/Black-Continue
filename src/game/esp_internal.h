@@ -61,6 +61,7 @@ struct NodePass {
     uint32_t chunks = 0, unread = 0;  // reads of the walk, and the ones that failed
     uint32_t kind_far = 0;  // headers of a body's kind whose second word is not 0 (a body's is 0)
     uint32_t hdr_far_by[16] = {};  // the same by the 4 MB of RAM they lie in
+    std::vector<uint32_t> far;     // their addresses (kMaxFar of them), read as bodies in the lines of a new level
     uint32_t kinds[257] = {};  // nodes met by kind, the last for 256 and up
     std::unordered_map<uint32_t, BigKind> big;  // the kinds of 256 and up
 };
