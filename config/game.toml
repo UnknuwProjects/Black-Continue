@@ -332,6 +332,10 @@ call = "SwayEnd"
 [[hook]]
 at = 0x1E6757
 call = "ViewmodelShift"
+
+[[hook]]
+at = 0x1E6757
+call = "PlayerProbe"
  
 [[hook]]
 at = 0x163655
