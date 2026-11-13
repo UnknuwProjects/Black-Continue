@@ -102,6 +102,8 @@ constexpr Target kActions[] = {
     {{"strafe_right", "STRAFE RIGHT", "D"}, 19},
     {{"walk", "WALK", "Alt"}, kWalk},
     {{"crouch", "CROUCH", "C"}, 14},
+    {{"jump", "JUMP", "Space"}, kHostKey},
+    {{"sprint", "SPRINT", "Shift"}, kHostKey},
     {{"fire", "FIRE", "LMB"}, 7},
     {{"aim", "AIM", "RMB"}, 15},
     {{"melee", "MELEE", "V"}, 1},
@@ -131,6 +133,8 @@ constexpr size_t HostAction(std::string_view id) {
 }
 constexpr size_t kHudAction = HostAction("hide_hud");
 constexpr size_t kPanelAction = HostAction("settings_panel");
+constexpr size_t kJumpAction = HostAction("jump");
+constexpr size_t kSprintAction = HostAction("sprint");
 struct Name {
     int vk;
     const char* name;
@@ -218,6 +222,14 @@ bool HostKeyBound(size_t action, int vk) {
     std::lock_guard lock(g_bind_lock);
     const auto& b = g_binds[action];
     return std::find(b.begin(), b.end(), vk) != b.end();
+}
+
+// a host action's key held in play (jump, sprint): the game side reads it, the pad never sees it
+bool HostKeyHeld(size_t action) {
+    if (KeyCaptureUp() || !Active() || !Play()) return false;
+    std::lock_guard lock(g_bind_lock);
+    const auto& b = g_binds[action];
+    return std::any_of(b.begin(), b.end(), [](int vk) { return GameDown(vk); });
 }
 
 // keys held from before the game had the input wait for release; true once none is held
@@ -603,9 +615,9 @@ enum class Role : uint8_t { None, Stick, Look, Button, Cursor, Drag, Pinch };
 
 // a control of the touch layout: what it shows and presses, on the controller (analog 0-7, button bits from 8) or on
 // the host. Where it sits is the layout's, which the player edits and picks presets for
-enum : int { kGyro = -2, kPanel = -1, kAnalogA = 0, kAnalogB = 1, kAnalogX = 2, kAnalogY = 3, kAnalogLT = 6, kAnalogRT = 7 };
+enum : int { kJump = -11, kSprint = -10, kGyro = -2, kPanel = -1, kAnalogA = 0, kAnalogB = 1, kAnalogX = 2, kAnalogY = 3, kAnalogLT = 6, kAnalogRT = 7 };
 constexpr int kBit = 8;  // kBit + n: buttons bit n (dpad up down left right, start, back, left thumb, right thumb)
-enum class Icon : uint8_t { Bullet, Scope, Mode, Reload, Crouch, Knife, Hand, Grenade, Swap, Health, Map, Pause, Gear, Back, Gyro, Move, Suppressor, Up, Down, Left, Right, Zoom, Enter };
+enum class Icon : uint8_t { Bullet, Scope, Mode, Reload, Crouch, Knife, Hand, Grenade, Swap, Health, Map, Pause, Gear, Back, Gyro, Move, Suppressor, Up, Down, Left, Right, Zoom, Enter, Jump, Sprint };
 // Play while the player has the controls, Game outside the menus (cutscenes too), Menus in the menus and options,
 // Always in both
 enum class When : uint8_t { Play, Menus, Game, Always };
@@ -648,8 +660,11 @@ constexpr Button kButtons[] = {
     {"enter", "Enter", Icon::Enter, kAnalogA, When::Menus},
     // the firing mode's button again, beside use while a scope is up: the scope's level, X2 or X5, and a tap switches
     {"zoom", "Scope zoom", Icon::Zoom, kBit + 0, When::Play},
+    // the host's own: the pad has no jump or sprint, the game side reads these (input::JumpHeld, SprintHeld)
+    {"jump", "Jump", Icon::Jump, kJump, When::Play},
+    {"sprint", "Sprint", Icon::Sprint, kSprint, When::Play},
 };
-constexpr size_t kZoomButton = std::size(kButtons) - 1;
+constexpr size_t kZoomButton = std::size(kButtons) - 3;  // jump and sprint come after it
 constexpr float kScoped = 0.6f;  // game::g_zoom under this is a scope's, not a rifle's sights
 constexpr float kScopeX5 = 0.36f;  // and under this its X5, between X2's 0.5 and X5's 0.25
 constexpr size_t kButtonCount = std::size(kButtons);
@@ -672,6 +687,8 @@ constexpr Layout kTwoFinger = {{
     {0.581f, 0.07f, 0.04f},
     {0.92f, 0.78f, 0.07f},
     {0.715f, 0.40f, 0.05f},
+    {0.86f, 0.24f, 0.055f},
+    {0.07f, 0.22f, 0.05f},
     {0.108f, 0.70f, 0.12f},
 }};
 // claw with the left index finger: fire at the top left, the right thumb turns and aims
@@ -685,6 +702,8 @@ constexpr Layout kThreeFinger = {{
     {0.581f, 0.07f, 0.04f},
     {0.92f, 0.78f, 0.07f},
     {0.69f, 0.40f, 0.045f},
+    {0.90f, 0.22f, 0.055f},
+    {0.16f, 0.18f, 0.05f},
     {0.13f, 0.72f, 0.12f},
 }};
 // both index fingers on top: fire at the top left, aim and crouch at the top right
@@ -698,6 +717,8 @@ constexpr Layout kFourFinger = {{
     {0.581f, 0.07f, 0.04f},
     {0.92f, 0.78f, 0.07f},
     {0.655f, 0.38f, 0.045f},
+    {0.86f, 0.42f, 0.05f},
+    {0.16f, 0.18f, 0.05f},
     {0.13f, 0.72f, 0.12f},
 }};
 struct Preset {
@@ -1492,6 +1513,21 @@ void DrawIcon(const Pen& p, Icon icon) {
             for (float x : {0.04f, 0.22f, 0.40f})
                 p.dl->AddLine(p.P(x, -0.17f), p.P(x, 0.17f), IM_COL32(0, 0, 0, 140), p.th * 0.6f);
             break;
+        case Icon::Jump:  // two chevrons up
+            for (float y : {-0.12f, 0.2f}) {
+                p.Line(-0.4f, y + 0.2f, 0.0f, y - 0.2f);
+                p.Line(0.0f, y - 0.2f, 0.4f, y + 0.2f);
+            }
+            break;
+        case Icon::Sprint:  // a runner with speed lines behind
+            p.Dot(0.14f, -0.46f, 0.09f);
+            p.Line(0.08f, -0.3f, -0.04f, 0.1f);
+            p.Line(-0.04f, 0.1f, 0.26f, 0.4f);
+            p.Line(-0.04f, 0.1f, -0.3f, 0.4f);
+            p.Line(0.04f, -0.2f, 0.38f, -0.06f);
+            p.Line(0.04f, -0.2f, -0.28f, 0.0f);
+            for (float y : {-0.3f, -0.1f, 0.1f}) p.Line(-0.62f, y, -0.46f, y);
+            break;
         case Icon::Enter:  // a return arrow: down the right, then back to the left
             p.Line(0.38f, -0.4f, 0.38f, 0.14f);
             p.Arrow(0.38f, 0.14f, -0.42f, 0.14f, 0.22f);
@@ -1531,7 +1567,9 @@ ImU32 Fade(int r, int g, int b, int a) { return IM_COL32(r, g, b, int(float(a) *
 // Each image is a cell wide and sits at its bottom, so a button's circle is the cell's width across
 
 enum SkinPart : int { kFire, kAim, kMode, kReload, kCrouch, kMelee, kUse, kGrenade, kWeapon, kHealth, kObjectives,
-                      kPause, kGyroPart, kBackPart, kSuppressor, kStickBase, kStickKnob, kSkinParts, kNoPart = -1 };
+                      kPause, kGyroPart, kBackPart, kSuppressor, kStickBase, kStickKnob, kSkinParts,
+                      kJumpPart, kSprintPart, kNoPart = -1 };
+constexpr int kJumpCell = 34, kSprintCell = 35;  // cells of buttons.png after the clean set, for either skin
 constexpr float kSkinCellW = 192, kSkinCellH = 209;
 constexpr int kSkinColumns = 6;
 constexpr const char* kSkinFile = "skins/buttons.png";  // in the APK's assets
@@ -1556,6 +1594,8 @@ SkinPart PartOf(Icon icon) {
         case Icon::Gyro: return kGyroPart;
         case Icon::Back: return kBackPart;
         case Icon::Suppressor: return kSuppressor;
+        case Icon::Jump: return kJumpPart;
+        case Icon::Sprint: return kSprintPart;
         default: return kNoPart;
     }
 }
@@ -1565,7 +1605,7 @@ bool Skinned() { return g_skin != kClassic && g_skin_texture; }
 
 // a part of the skin in use, its circle of radius r about c
 void SkinImage(ImDrawList* dl, SkinPart part, ImVec2 c, float r, ImU32 tint) {
-    int i = int(g_skin == kClean ? kSkinParts : 0) + part;
+    int i = part == kJumpPart ? kJumpCell : part == kSprintPart ? kSprintCell : int(g_skin == kClean ? kSkinParts : 0) + part;
     float u = float(i % kSkinColumns) * kSkinCellW, v = float(i / kSkinColumns) * kSkinCellH;
     float top = c.y + r - 2 * r * kSkinCellH / kSkinCellW;
     dl->AddImage(g_skin_texture, ImVec2(c.x - r, top), ImVec2(c.x + r, c.y + r), ImVec2(u / g_skin_w, v / g_skin_h),
@@ -1945,6 +1985,20 @@ bool LeftButton() {
 namespace input {
 
 bool TouchActive() { return g_touch; }
+
+namespace {
+// a touch control that presses a host action, held now
+bool TouchHeld(int press) {
+    std::lock_guard lock(touch::g_lock);
+    for (size_t i = 0; i < touch::kButtonCount; i++)
+        if (touch::g_pressed[i] && touch::kButtons[i].press == press) return true;
+    return false;
+}
+}  // namespace
+
+// the player asks to jump or sprint: the touch control or the key. The pad has no such button
+bool JumpHeld() { return TouchHeld(touch::kJump) || HostKeyHeld(kJumpAction); }
+bool SprintHeld() { return TouchHeld(touch::kSprint) || HostKeyHeld(kSprintAction); }
 
 // the touch control that presses the pad's button: 0-7 analog A B X Y black white LT RT, 8-15 the button bits
 std::string TouchName(int button) {
