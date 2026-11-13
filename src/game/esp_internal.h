@@ -129,6 +129,14 @@ float NearDist(const float* p);
 bool NearOpen(const float* p);
 bool NearTake();
 
+// the enemies the ESP has seen that were alive at the last call and are dead now (their address and where they stood): for the
+// lines e of the objectives, which enemy died as a destroy was credited. Needs an enemy ESP part or an aim cheat on
+struct EnemyDeath {
+    uint32_t who;
+    float pos[3];
+};
+size_t EnemyDeaths(EnemyDeath* out, size_t max);
+
 // esp_item.cpp
 void ObjectivesTrack(const float* mine, std::chrono::steady_clock::time_point now);
 void ObjectiveOverlay(ImDrawList* draw, ImFont* font, float size, float fx, float fy, float fw, float fh);
