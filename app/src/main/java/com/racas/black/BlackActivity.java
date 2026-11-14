@@ -6,6 +6,7 @@ import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.BatteryManager;
@@ -51,9 +52,26 @@ public class BlackActivity extends SDLActivity {
         return new String[] {"SDL3", "main"};
     }
 
+    // Landscape follows the sensor, both ways up. SDL (from its orientation hint) and the manifest may ask for one fixed
+    // landscape; any such request becomes sensor landscape, and the orientation is also set once here.
+    @Override
+    public void setRequestedOrientation(int orientation) {
+        switch (orientation) {
+            case ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE:
+            case ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE:
+            case ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE:
+                orientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE;
+                break;
+            default:
+                break;
+        }
+        super.setRequestedOrientation(orientation);
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
         for (View v : new View[] {mSurface, mLayout})
             if (v != null) v.setOnCapturedPointerListener(BlackActivity::onCapturedPointer);
         File own = getExternalFilesDir(null);
