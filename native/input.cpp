@@ -182,11 +182,12 @@ extern "C" JNIEXPORT void JNICALL Java_com_racas_black_BlackActivity_nativeLoose
 // BlackActivity's readings for the overlay, below 0 when it could not read one
 extern "C" JNIEXPORT void JNICALL Java_com_racas_black_BlackActivity_nativeSetStats(JNIEnv*, jclass, jfloat cpu_temp,
                                                                                     jfloat bat_temp, jint cpu_load,
-                                                                                    jint ram_used) {
+                                                                                    jint ram_used, jint bat_level) {
     game::g_cpu_temp.store(cpu_temp);
     game::g_bat_temp.store(bat_temp);
     game::g_cpu_load.store(cpu_load);
     game::g_ram_used.store(ram_used);
+    game::g_bat_level.store(bat_level);
 }
 
 extern "C" JNIEXPORT void JNICALL Java_com_racas_black_BlackActivity_nativeLooseRelease(JNIEnv*, jclass) {
