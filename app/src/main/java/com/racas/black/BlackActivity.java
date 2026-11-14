@@ -1,6 +1,7 @@
 package com.racas.black;
 
 import android.Manifest;
+import android.app.ActivityManager;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
@@ -27,7 +28,9 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 
 import org.libsdl.app.SDLActivity;
 import org.libsdl.app.SDLControllerManager;
@@ -70,24 +73,36 @@ public class BlackActivity extends SDLActivity {
     private static native void nativeLooseAxes(float lx, float ly, float rx, float ry, float lt, float rt, float hx,
                                                float hy);
     private static native void nativeLooseRelease();
-    private static native void nativeSetTemps(float cpu, float bat);
+    private static native void nativeSetStats(float cpuTemp, float batTemp, int cpuLoad, int ramUsed);
 
-    // The overlay's temperatures: the battery's from the sticky battery broadcast, the CPU's from the thermal zones when
-    // the phone lets an app read them (below 0 when it does not, and the overlay leaves it out)
+    // The overlay's readings, every two seconds while the game is in front: the battery's temperature from the sticky
+    // battery broadcast, the RAM in use from ActivityManager, the CPU's temperature from the thermal zones, its load from
+    // /proc/stat or, where newer Android keeps that from apps, from the clocks against their maximums. What the phone
+    // does not give goes on as -1 and the overlay leaves it out.
     private Thread tempThread;
     private volatile boolean tempRun;
-    private List<File> cpuZones;
+    private List<ThermalZone> cpuZones;
+    private long lastCpuTotal = -1;
+    private long lastCpuIdle = -1;
+
+    private static final class ThermalZone {
+        final int rank;  // lower is more likely the CPU itself
+        final File temp;
+
+        ThermalZone(int rank, File temp) {
+            this.rank = rank;
+            this.temp = temp;
+        }
+    }
 
     private void startTemps() {
         if (tempThread != null) return;
         tempRun = true;
         tempThread = new Thread(() -> {
             while (tempRun) {
-                float bat = readBatteryTemp();
-                float cpu = readCpuTemp();
                 if (!mBrokenLibraries) {
                     try {
-                        nativeSetTemps(cpu, bat);
+                        nativeSetStats(readCpuTemp(), readBatteryTemp(), readCpuLoad(), readRamUsed());
                     } catch (Throwable t) {
                         tempRun = false;
                     }
@@ -98,7 +113,7 @@ public class BlackActivity extends SDLActivity {
                     return;
                 }
             }
-        }, "temps");
+        }, "overlay-stats");
         tempThread.setDaemon(true);
         tempThread.start();
     }
@@ -120,6 +135,22 @@ public class BlackActivity extends SDLActivity {
         }
     }
 
+    private int readRamUsed() {
+        try {
+            ActivityManager am = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
+            ActivityManager.MemoryInfo info = new ActivityManager.MemoryInfo();
+            am.getMemoryInfo(info);
+            if (info.totalMem <= 0) return -1;
+            return clampPercent((int) ((info.totalMem - info.availMem) * 100 / info.totalMem));
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+
+    private static int clampPercent(int v) {
+        return Math.max(0, Math.min(100, v));
+    }
+
     private static String readLine(File f) {
         try (BufferedReader r = new BufferedReader(new FileReader(f))) {
             return r.readLine();
@@ -128,35 +159,98 @@ public class BlackActivity extends SDLActivity {
         }
     }
 
-    // the thermal zones whose type names a CPU (Qualcomm cpu-*, MediaTek mtktscpu, Exynos BIG/MID/LITTLE), found once
-    private List<File> findCpuZones() {
-        List<File> out = new ArrayList<>();
-        for (int i = 0; i < 64; i++) {
-            File zone = new File("/sys/class/thermal/thermal_zone" + i);
-            String type = readLine(new File(zone, "type"));
-            if (type == null) continue;
-            type = type.toLowerCase();
-            if (type.contains("battery") || type.contains("gpu") || type.contains("charger")) continue;
-            if (type.contains("cpu") || type.contains("big") || type.contains("mid") || type.contains("little")
-                    || type.contains("soc"))
-                out.add(new File(zone, "temp"));
+    private static long readLong(String path) {
+        try {
+            String line = readLine(new File(path));
+            return line == null ? -1 : Long.parseLong(line.trim());
+        } catch (NumberFormatException e) {
+            return -1;
         }
+    }
+
+    private int readCpuLoad() {
+        try (BufferedReader r = new BufferedReader(new FileReader("/proc/stat"))) {
+            String[] p = r.readLine().trim().split("\\s+");
+            long total = 0, idle = 0;
+            for (int i = 1; i < p.length && i <= 8; i++) {
+                long v = Long.parseLong(p[i]);
+                total += v;
+                if (i == 4 || i == 5) idle += v;
+            }
+            boolean had = lastCpuTotal >= 0;
+            long dTotal = total - lastCpuTotal;
+            long dIdle = idle - lastCpuIdle;
+            lastCpuTotal = total;
+            lastCpuIdle = idle;
+            if (had && dTotal > 0) return clampPercent((int) ((dTotal - dIdle) * 100 / dTotal));
+        } catch (Exception e) {
+            // kept from apps: the clocks below
+        }
+        long cur = 0, max = 0;
+        int cores = Runtime.getRuntime().availableProcessors();
+        for (int i = 0; i < cores; i++) {
+            String base = "/sys/devices/system/cpu/cpu" + i + "/cpufreq/";
+            long c = readLong(base + "scaling_cur_freq");
+            long m = readLong(base + "cpuinfo_max_freq");
+            if (c > 0 && m > 0) {
+                cur += c;
+                max += m;
+            }
+        }
+        return max > 0 ? clampPercent((int) (cur * 100 / max)) : -1;
+    }
+
+    private static int zoneRank(String type) {
+        if (type.contains("gpu") || type.contains("battery") || type.contains("charger")) return -1;
+        if (type.contains("cpu-silicon")) return 0;
+        if (type.contains("cpu-0")) return 1;
+        if (type.contains("cpu")) return 2;  // cpuss, mtktscpu, cputop
+        if (type.contains("tmu")) return 3;  // Exynos
+        if (type.contains("soc")) return 4;
+        if (type.contains("tsens")) return 5;
+        if (type.contains("cluster")) return 6;
+        if (type.contains("big") || type.contains("mid") || type.contains("little")) return 7;
+        return -1;
+    }
+
+    // the zones that name a CPU and that the app may read, best first, found once
+    private List<ThermalZone> findCpuZones() {
+        List<ThermalZone> out = new ArrayList<>();
+        List<String> seen = new ArrayList<>();
+        String[] roots = {"/sys/class/thermal", "/sys/devices/virtual/thermal"};
+        for (String root : roots) {
+            File[] zones = new File(root).listFiles((dir, name) -> name.startsWith("thermal_zone"));
+            if (zones == null) continue;
+            for (File zone : zones) {
+                String type = readLine(new File(zone, "type"));
+                if (type == null) continue;
+                int rank = zoneRank(type.trim().toLowerCase(Locale.US));
+                File temp = new File(zone, "temp");
+                if (rank < 0 || !temp.canRead()) continue;
+                String path = temp.getAbsolutePath();
+                if (seen.contains(path)) continue;
+                seen.add(path);
+                out.add(new ThermalZone(rank, temp));
+            }
+        }
+        Collections.sort(out, (a, b) -> a.rank - b.rank);
         return out;
     }
 
     private float readCpuTemp() {
         if (cpuZones == null) cpuZones = findCpuZones();
-        float hottest = -1f;
-        for (File f : cpuZones) {
-            String line = readLine(f);
+        for (ThermalZone zone : cpuZones) {
+            String line = readLine(zone.temp);
             if (line == null) continue;
             try {
                 float v = Float.parseFloat(line.trim());
                 if (v > 1000f) v /= 1000f;  // most phones give thousandths of a degree
-                if (v > 10f && v < 120f && v > hottest) hottest = v;
-            } catch (NumberFormatException e) {}
+                if (v > 10f && v < 120f) return v;
+            } catch (NumberFormatException e) {
+                // the next zone
+            }
         }
-        return hottest;
+        return -1f;
     }
 
     private static boolean loose(InputEvent e, int sources) {
