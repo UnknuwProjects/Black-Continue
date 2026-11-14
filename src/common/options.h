@@ -15,7 +15,7 @@ struct Options {
     bool skip_intros = false;  // logos at boot and the film after pressing start
     bool fps_counter = false;
     // the overlay (src/game/fps_counter.cpp): where the FPS line goes, 0 top left, 1 top middle, 2 top right, 3 bottom
-    // left, 4 bottom middle, 5 bottom right; the CPU and battery temperatures on it; the MOD BY UNKNUW mark: 0 off, 1 to 3
+    // left, 4 bottom middle, 5 bottom right; the CPU, RAM and battery readings on it; the MOD BY UNKNUW mark, shown with the counter: 1 to 3
     // bottom left, middle, right
     uint32_t fps_position = 0;
     bool fps_temps = true;
@@ -95,9 +95,12 @@ const std::string& BootLanguage();
 bool HasLanguages();  // language.cpp
 bool LanguageAvailable(const std::string& code);  // language.cpp: the LANGUAGE row offers it
 inline std::atomic<float> g_fps{0};  // from the host, for the game's own counter
-// degrees C from BlackActivity's thread (nativeSetTemps in input.cpp), below 0 while unread or when the phone gives none
+// from BlackActivity's thread (nativeSetStats in input.cpp), below 0 while unread or when the phone gives none: the
+// temperatures in degrees C, the CPU's load and the RAM in use in percent
 inline std::atomic<float> g_cpu_temp{-1.0f};
 inline std::atomic<float> g_bat_temp{-1.0f};
+inline std::atomic<int> g_cpu_load{-1};
+inline std::atomic<int> g_ram_used{-1};
 inline std::atomic<bool> g_hide_hud{false};  // the toggle HUD key: the gameplay HUD is not drawn
 // the view's zoom as the look update scales the turn by (src/game/mouse.cpp): 1 none, about 0.74 a rifle's sights,
 // a scope's levels under that (a half at X2, a quarter at X5)
