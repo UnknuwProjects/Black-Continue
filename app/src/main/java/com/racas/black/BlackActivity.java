@@ -4,8 +4,10 @@ import android.Manifest;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.net.Uri;
+import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
@@ -21,7 +23,9 @@ import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.widget.Toast;
 
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileReader;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -66,6 +70,94 @@ public class BlackActivity extends SDLActivity {
     private static native void nativeLooseAxes(float lx, float ly, float rx, float ry, float lt, float rt, float hx,
                                                float hy);
     private static native void nativeLooseRelease();
+    private static native void nativeSetTemps(float cpu, float bat);
+
+    // The overlay's temperatures: the battery's from the sticky battery broadcast, the CPU's from the thermal zones when
+    // the phone lets an app read them (below 0 when it does not, and the overlay leaves it out)
+    private Thread tempThread;
+    private volatile boolean tempRun;
+    private List<File> cpuZones;
+
+    private void startTemps() {
+        if (tempThread != null) return;
+        tempRun = true;
+        tempThread = new Thread(() -> {
+            while (tempRun) {
+                float bat = readBatteryTemp();
+                float cpu = readCpuTemp();
+                if (!mBrokenLibraries) {
+                    try {
+                        nativeSetTemps(cpu, bat);
+                    } catch (Throwable t) {
+                        tempRun = false;
+                    }
+                }
+                try {
+                    Thread.sleep(2000);
+                } catch (InterruptedException e) {
+                    return;
+                }
+            }
+        }, "temps");
+        tempThread.setDaemon(true);
+        tempThread.start();
+    }
+
+    private void stopTemps() {
+        tempRun = false;
+        if (tempThread != null) tempThread.interrupt();
+        tempThread = null;
+    }
+
+    private float readBatteryTemp() {
+        try {
+            Intent i = registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+            if (i == null) return -1f;
+            int tenths = i.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1);
+            return tenths < 0 ? -1f : tenths / 10f;
+        } catch (Exception e) {
+            return -1f;
+        }
+    }
+
+    private static String readLine(File f) {
+        try (BufferedReader r = new BufferedReader(new FileReader(f))) {
+            return r.readLine();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    // the thermal zones whose type names a CPU (Qualcomm cpu-*, MediaTek mtktscpu, Exynos BIG/MID/LITTLE), found once
+    private List<File> findCpuZones() {
+        List<File> out = new ArrayList<>();
+        for (int i = 0; i < 64; i++) {
+            File zone = new File("/sys/class/thermal/thermal_zone" + i);
+            String type = readLine(new File(zone, "type"));
+            if (type == null) continue;
+            type = type.toLowerCase();
+            if (type.contains("battery") || type.contains("gpu") || type.contains("charger")) continue;
+            if (type.contains("cpu") || type.contains("big") || type.contains("mid") || type.contains("little")
+                    || type.contains("soc"))
+                out.add(new File(zone, "temp"));
+        }
+        return out;
+    }
+
+    private float readCpuTemp() {
+        if (cpuZones == null) cpuZones = findCpuZones();
+        float hottest = -1f;
+        for (File f : cpuZones) {
+            String line = readLine(f);
+            if (line == null) continue;
+            try {
+                float v = Float.parseFloat(line.trim());
+                if (v > 1000f) v /= 1000f;  // most phones give thousandths of a degree
+                if (v > 10f && v < 120f && v > hottest) hottest = v;
+            } catch (NumberFormatException e) {}
+        }
+        return hottest;
+    }
 
     private static boolean loose(InputEvent e, int sources) {
         return !mBrokenLibraries && (e.getSource() & sources) != 0
@@ -156,6 +248,7 @@ public class BlackActivity extends SDLActivity {
     protected void onResume() {
         super.onResume();
         resumed = true;
+        startTemps();
         askForGame();
         tellOfUpdate();
     }
@@ -163,6 +256,7 @@ public class BlackActivity extends SDLActivity {
     @Override
     protected void onPause() {
         resumed = false;
+        stopTemps();
         super.onPause();
     }
 
