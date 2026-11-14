@@ -73,7 +73,8 @@ public class BlackActivity extends SDLActivity {
     private static native void nativeLooseAxes(float lx, float ly, float rx, float ry, float lt, float rt, float hx,
                                                float hy);
     private static native void nativeLooseRelease();
-    private static native void nativeSetStats(float cpuTemp, float batTemp, int cpuLoad, int ramUsed);
+    private static native void nativeSetStats(float cpuTemp, float batTemp, int cpuLoad, int ramUsed,
+                                                int batLevel);
 
     // The overlay's readings, every two seconds while the game is in front: the battery's temperature from the sticky
     // battery broadcast, the RAM in use from ActivityManager, the CPU's temperature from the thermal zones, its load from
@@ -102,7 +103,8 @@ public class BlackActivity extends SDLActivity {
             while (tempRun) {
                 if (!mBrokenLibraries) {
                     try {
-                        nativeSetStats(readCpuTemp(), readBatteryTemp(), readCpuLoad(), readRamUsed());
+                        nativeSetStats(readCpuTemp(), readBatteryTemp(), readCpuLoad(), readRamUsed(),
+                                readBatteryLevel());
                     } catch (Throwable t) {
                         tempRun = false;
                     }
@@ -132,6 +134,19 @@ public class BlackActivity extends SDLActivity {
             return tenths < 0 ? -1f : tenths / 10f;
         } catch (Exception e) {
             return -1f;
+        }
+    }
+
+    private int readBatteryLevel() {
+        try {
+            Intent i = registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+            if (i == null) return -1;
+            int level = i.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
+            int scale = i.getIntExtra(BatteryManager.EXTRA_SCALE, -1);
+            if (level < 0 || scale <= 0) return -1;
+            return clampPercent(level * 100 / scale);
+        } catch (Exception e) {
+            return -1;
         }
     }
 
