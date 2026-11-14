@@ -136,6 +136,7 @@ struct EnemyDeath {
     float pos[3];
 };
 size_t EnemyDeaths(EnemyDeath* out, size_t max);
+size_t EnemiesAlive(uint32_t* out, size_t max);  // the ones EnemyDeaths knows alive, to read their records while they live
 
 // esp_item.cpp
 void ObjectivesTrack(const float* mine, std::chrono::steady_clock::time_point now);
