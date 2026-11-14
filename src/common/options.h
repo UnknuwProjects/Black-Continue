@@ -15,10 +15,12 @@ struct Options {
     bool skip_intros = false;  // logos at boot and the film after pressing start
     bool fps_counter = false;
     // the overlay (src/game/fps_counter.cpp): where the FPS line goes, 0 top left, 1 top middle, 2 top right, 3 bottom
-    // left, 4 bottom middle, 5 bottom right; the CPU, RAM and battery readings on it; the MOD BY UNKNUW mark, shown with the counter: 1 to 3
+    // left, 4 bottom middle, 5 bottom right; the CPU, RAM and battery readings on it, each shown or not; the MOD BY UNKNUW mark, shown with the counter: 1 to 3
     // bottom left, middle, right
     uint32_t fps_position = 0;
-    bool fps_temps = true;
+    bool show_cpu = true;  // each reading of the overlay's line on its own
+    bool show_ram = true;
+    bool show_bat = true;
     uint32_t watermark_pos = 1;
     uint32_t fmv_scale = 0;  // 4:3 films on a wider screen: 0 fill it, top and bottom cut; 1 kept 4:3
     // a look over the frame: 0 none, 1 and 2 a CRT (light, strong), 3 sharpen, 4 vibrant, 5 noir, 6 sepia,
