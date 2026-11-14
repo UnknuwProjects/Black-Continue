@@ -179,6 +179,13 @@ extern "C" JNIEXPORT void JNICALL Java_com_racas_black_BlackActivity_nativeLoose
     g_loose.lt = lt, g_loose.rt = rt, g_loose.hx = hx, g_loose.hy = hy;
 }
 
+// BlackActivity's temperature thread: degrees C for the overlay, below 0 when it could not read one
+extern "C" JNIEXPORT void JNICALL Java_com_racas_black_BlackActivity_nativeSetTemps(JNIEnv*, jclass, jfloat cpu,
+                                                                                    jfloat bat) {
+    game::g_cpu_temp.store(cpu);
+    game::g_bat_temp.store(bat);
+}
+
 extern "C" JNIEXPORT void JNICALL Java_com_racas_black_BlackActivity_nativeLooseRelease(JNIEnv*, jclass) {
     std::lock_guard lock(g_loose_lock);
     bool seen = g_loose.seen;
