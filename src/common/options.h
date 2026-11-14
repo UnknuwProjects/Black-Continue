@@ -101,6 +101,7 @@ inline std::atomic<float> g_cpu_temp{-1.0f};
 inline std::atomic<float> g_bat_temp{-1.0f};
 inline std::atomic<int> g_cpu_load{-1};
 inline std::atomic<int> g_ram_used{-1};
+inline std::atomic<int> g_bat_level{-1};  // the battery's charge, percent
 inline std::atomic<bool> g_hide_hud{false};  // the toggle HUD key: the gameplay HUD is not drawn
 // the view's zoom as the look update scales the turn by (src/game/mouse.cpp): 1 none, about 0.74 a rifle's sights,
 // a scope's levels under that (a half at X2, a quarter at X5)
