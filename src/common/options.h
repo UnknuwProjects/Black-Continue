@@ -125,6 +125,11 @@ inline std::atomic<float> g_sprint_pose{0};
 // the pad's left stick pushed ahead (the angle within 45 degrees of straight forward), false in the panel: sprint needs it
 inline std::atomic<bool> g_move_forward{false};
 // the pad's left stick, -1 .. 1 (x to the right, y ahead), 0 in the panel: NOCLIP walks by it
+// a crouch press to give the game once (the player is crouched and a jump or fly wants him standing: the crouch is a
+// toggle, so one press stands him) and the time up to which the real crouch button is held back (fly and noclip use it
+// for 'down'): both are done to the pad in game_info.cpp, from movement.cpp
+inline std::atomic<int> g_stand_request{0};
+inline std::atomic<int64_t> g_crouch_block_until{0};
 inline std::atomic<float> g_move_x{0};
 inline std::atomic<float> g_move_y{0};
 // steady_clock milliseconds up to which the player is sprinting (movement.cpp renews it each frame): the fire button is
