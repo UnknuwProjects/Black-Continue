@@ -50,9 +50,11 @@ struct Options {
     uint32_t fov = 70;  // horizontal degrees on a 4:3 frame, 70 is the game's
     uint32_t viewmodel_fov = 70;  // the gun and arms, the same measure
     uint32_t walk_speed = 50;  // percent of running, while the walk key is held
-    uint32_t sprint_speed = 150;  // percent of running while sprint is held (src/game/movement.cpp)
+    uint32_t sprint_speed = 150;  // percent of running while sprint is held, 100 to 1000 (src/game/movement.cpp)
     bool sprint_fov = true;  // the view widens a little while sprinting
-    uint32_t jump_height = 80;  // centimetres the feet rise; the game's gravity is 12 m/s squared
+    bool sprint_pose = true;  // the gun tilts and lowers while sprinting (ViewmodelShift in src/game/hooks.cpp, SaveData/sprint_pose.txt)
+    bool sprint_lines = true;  // speed lines at the edges of the screen while sprinting (SprintLines, src/game/movement.cpp)
+    uint32_t jump_height = 80;  // centimetres the feet rise, 30 to 5000; the game's gravity measured 13.2 m/s squared
     uint32_t jump_mode = 0;  // 0 NORMAL, 1 FLY: jump rises while held, nothing pulls down, crouch goes down
     bool double_jump = false;  // one more jump in the air
     // a controller's sticks: the radial dead zone as percent of the travel, 0 the game's own, and what the travel
@@ -114,6 +116,10 @@ inline std::atomic<int> g_bat_level{-1};  // the battery's charge, percent
 // the crouch button of the pad (the touch crouch, bit 6 of the buttons), false while the panel is open: FLY goes down
 // with it (src/game/movement.cpp), written in game_info.cpp
 inline std::atomic<bool> g_crouch_held{false};
+// the sprint's speed lines, 0 none .. 1 full (written by movement.cpp's hook, drawn by game::SprintLines from the UI)
+inline std::atomic<float> g_sprint_lines{0};
+// the sprint's gun pose, 0 hip .. 1 fully sprinting (movement.cpp's hook writes it, hooks.cpp's ViewmodelShift reads it)
+inline std::atomic<float> g_sprint_pose{0};
 inline std::atomic<bool> g_hide_hud{false};  // the toggle HUD key: the gameplay HUD is not drawn
 // the view's zoom as the look update scales the turn by (src/game/mouse.cpp): 1 none, about 0.74 a rifle's sights,
 // a scope's levels under that (a half at X2, a quarter at X5)
