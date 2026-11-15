@@ -25,6 +25,8 @@ void Pad(int port, input::Pad& pad) {
     const bool play = !app::MenuOpen();
     g_crouch_held = play && (pad.buttons & (1u << 6)) != 0;
     // sprint only ahead: the left stick (or W) pushed up, not further than 45 degrees to a side
+    g_move_x = play ? std::clamp(pad.lx / 32767.0f, -1.0f, 1.0f) : 0.0f;
+    g_move_y = play ? std::clamp(pad.ly / 32767.0f, -1.0f, 1.0f) : 0.0f;
     g_move_forward = play && pad.ly > 16000 && std::abs(int(pad.lx)) <= int(pad.ly);
     // a sprint holds the fire button back (the right trigger)
     int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -122,6 +124,7 @@ const app::GameInfo app::kGame = {
                 {"sprint_lines", &game::Opt().sprint_lines, nullptr},
                 {"sprint_pose", nullptr, &game::Opt().sprint_pose},
                 {"infinite_stamina", &game::Opt().infinite_stamina, nullptr},
+                {"noclip", &game::Opt().noclip, nullptr},
                 {"jump_height", nullptr, &game::Opt().jump_height},
                 {"jump_mode", nullptr, &game::Opt().jump_mode},
                 {"double_jump", &game::Opt().double_jump, nullptr},
