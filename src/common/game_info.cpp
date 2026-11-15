@@ -19,6 +19,7 @@ void Pad(int port, input::Pad& pad) {
     if (port == 0) pad.connected = true;
     if (app::MenuOpen()) pad = input::Pad{.connected = pad.connected};
     else if (port == 0) input::Keyboard(pad);
+    if (port == 0) g_crouch_held = !app::MenuOpen() && (pad.buttons & (1u << 6)) != 0;
 }
 
 // no vibration while the keyboard and mouse are in use
