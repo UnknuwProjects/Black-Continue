@@ -1,4 +1,6 @@
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <iterator>
 
 #include <toml++/toml.hpp>
@@ -19,7 +21,14 @@ void Pad(int port, input::Pad& pad) {
     if (port == 0) pad.connected = true;
     if (app::MenuOpen()) pad = input::Pad{.connected = pad.connected};
     else if (port == 0) input::Keyboard(pad);
-    if (port == 0) g_crouch_held = !app::MenuOpen() && (pad.buttons & (1u << 6)) != 0;
+    if (port != 0) return;
+    const bool play = !app::MenuOpen();
+    g_crouch_held = play && (pad.buttons & (1u << 6)) != 0;
+    // sprint only ahead: the left stick (or W) pushed up, not further than 45 degrees to a side
+    g_move_forward = play && pad.ly > 16000 && std::abs(int(pad.lx)) <= int(pad.ly);
+    // a sprint holds the fire button back (the right trigger)
+    int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (play && now < g_sprint_until.load()) pad.analog[7] = 0;
 }
 
 // no vibration while the keyboard and mouse are in use
@@ -111,7 +120,8 @@ const app::GameInfo app::kGame = {
                 {"sprint_speed", nullptr, &game::Opt().sprint_speed},
                 {"sprint_fov", &game::Opt().sprint_fov, nullptr},
                 {"sprint_lines", &game::Opt().sprint_lines, nullptr},
-                {"sprint_pose", &game::Opt().sprint_pose, nullptr},
+                {"sprint_pose", nullptr, &game::Opt().sprint_pose},
+                {"infinite_stamina", &game::Opt().infinite_stamina, nullptr},
                 {"jump_height", nullptr, &game::Opt().jump_height},
                 {"jump_mode", nullptr, &game::Opt().jump_mode},
                 {"double_jump", &game::Opt().double_jump, nullptr},
