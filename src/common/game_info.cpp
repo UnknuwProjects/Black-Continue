@@ -31,6 +31,12 @@ void Pad(int port, input::Pad& pad) {
     // a sprint holds the fire button back (the right trigger)
     int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
     if (play && now < g_sprint_until.load()) pad.analog[7] = 0;
+    // crouch: held back while fly or noclip use it as 'down'; one press given to stand a crouched player up
+    if (play && now < g_crouch_block_until.load()) pad.buttons &= uint16_t(~(1u << 6));
+    if (play && g_stand_request.load() > 0) {
+        g_stand_request--;
+        pad.buttons |= uint16_t(1u << 6);
+    }
 }
 
 // no vibration while the keyboard and mouse are in use
