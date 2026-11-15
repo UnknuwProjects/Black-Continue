@@ -53,7 +53,7 @@ struct Options {
     uint32_t sprint_speed = 200;  // percent of running while sprint is held, 200 to 500 (src/game/movement.cpp)
     bool sprint_fov = true;  // the view widens a little while sprinting
     uint32_t sprint_pose = 1;  // the gun's pose while sprinting (ViewmodelShift in src/game/hooks.cpp): 0 off, 1 the built in pose, 2 SaveData/Sprint_Custom.txt
-    bool noclip = false;  // cheat, NOCLIP: the player walks through walls, floors and objects; jump goes up, crouch down (src/game/movement.cpp)
+    bool noclip = false;  // cheat, NOCLIP: the player walks through walls and objects; gravity, floors and jump stay the game's (src/game/movement.cpp)
     bool infinite_stamina = false;  // the sprint never runs out and the stamina bar is not shown (src/game/movement.cpp)
     bool sprint_lines = true;  // speed lines at the edges of the screen while sprinting (SprintLines, src/game/movement.cpp)
     uint32_t jump_height = 80;  // centimetres the feet rise, 30 to 5000; the game's gravity measured 13.2 m/s squared
