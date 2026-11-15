@@ -110,6 +110,8 @@ const app::GameInfo app::kGame = {
                 {"walk_speed", nullptr, &game::Opt().walk_speed},
                 {"sprint_speed", nullptr, &game::Opt().sprint_speed},
                 {"sprint_fov", &game::Opt().sprint_fov, nullptr},
+                {"sprint_lines", &game::Opt().sprint_lines, nullptr},
+                {"sprint_pose", &game::Opt().sprint_pose, nullptr},
                 {"jump_height", nullptr, &game::Opt().jump_height},
                 {"jump_mode", nullptr, &game::Opt().jump_mode},
                 {"double_jump", &game::Opt().double_jump, nullptr},
