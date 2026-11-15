@@ -50,6 +50,11 @@ struct Options {
     uint32_t fov = 70;  // horizontal degrees on a 4:3 frame, 70 is the game's
     uint32_t viewmodel_fov = 70;  // the gun and arms, the same measure
     uint32_t walk_speed = 50;  // percent of running, while the walk key is held
+    uint32_t sprint_speed = 150;  // percent of running while sprint is held (src/game/movement.cpp)
+    bool sprint_fov = true;  // the view widens a little while sprinting
+    uint32_t jump_height = 80;  // centimetres the feet rise; the game's gravity is 12 m/s squared
+    uint32_t jump_mode = 0;  // 0 NORMAL, 1 FLY: jump rises while held, nothing pulls down, crouch goes down
+    bool double_jump = false;  // one more jump in the air
     // a controller's sticks: the radial dead zone as percent of the travel, 0 the game's own, and what the travel
     // past it is scaled by; the left stick moves, the right looks
     uint32_t left_deadzone = 0;
@@ -97,6 +102,8 @@ const std::string& BootLanguage();
 bool HasLanguages();  // language.cpp
 bool LanguageAvailable(const std::string& code);  // language.cpp: the LANGUAGE row offers it
 inline std::atomic<float> g_fps{0};  // from the host, for the game's own counter
+// the view's widening while sprinting (src/game/movement.cpp): a part of the tangent of the half view, 0 none; hooks.cpp
+inline std::atomic<float> g_sprint_view{0};
 // from BlackActivity's thread (nativeSetStats in input.cpp), below 0 while unread or when the phone gives none: the
 // temperatures in degrees C, the CPU's load and the RAM in use in percent
 inline std::atomic<float> g_cpu_temp{-1.0f};
