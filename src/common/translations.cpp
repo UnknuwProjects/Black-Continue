@@ -265,6 +265,7 @@ constexpr Entry kEntries[] = {
     {"SPRINT VIEW EFFECT", {{}, {}, {}, {}, u"Efek pandangan sprint"}},
     {"SPRINT LINES", {{}, {}, {}, {}, u"Garis kecepatan sprint"}},
     {"SPRINT GUN POSE", {{}, {}, {}, {}, u"Pose senjata sprint"}},
+    {"INFINITE STAMINA", {{}, {}, {}, {}, u"Stamina tanpa batas"}},
     {"COLORS", {{}, {}, {}, {}, u"Warna"}},
     {"FILL MEDKITS", {{}, {}, {}, {}, u"Isi P3K"}},
     {"FILL GRENADES", {{}, {}, {}, {}, u"Isi granat"}},
