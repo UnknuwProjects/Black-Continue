@@ -5,6 +5,7 @@
 #include <jni.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <iterator>
@@ -236,6 +237,17 @@ Pad Poll(int port) {
         uint8_t analog[8] = {};
     };
     static Hold s_hold[4];
+    // L3 and R3 pressed together open the panel, but one of them goes down first: it is held back from the game for a
+    // moment, to see whether the other follows. If it does the two are the panel's; if the first is let go before that
+    // it was a tap, given to the game as a short press; if it is held on it goes to the game late
+    constexpr int64_t kThumbWindow = 100;  // milliseconds
+    constexpr int64_t kThumbTap = 60;
+    struct Thumb {
+        int64_t since = 0;  // when a lone thumb went down, 0 for none
+        uint16_t bit = 0;   // which
+        int64_t tap_until = 0;
+    };
+    static Thumb s_thumb[4];
     if (app::MenuOpen()) {
         p = Pad{};
         p.connected = true;
@@ -253,6 +265,26 @@ Pad Poll(int port) {
             if (p.analog[i] <= 0x20) h.analog[i] = 0;
             else if (h.analog[i]) p.analog[i] = 0;
         }
+        Thumb& t = s_thumb[port];
+        const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (h.buttons & 0xC0) {
+            // the two together (held back above), or still held after the panel: not a tap of either
+            t.since = 0;
+            t.tap_until = 0;
+        }
+        const uint16_t lone = uint16_t(p.buttons & 0xC0);
+        if (lone && lone != 0xC0) {
+            if (!t.since) {
+                t.since = now;
+                t.bit = lone;
+            }
+            if (now - t.since < kThumbWindow) p.buttons &= uint16_t(~0xC0);
+        } else if (!lone) {
+            if (t.since && now - t.since < kThumbWindow) t.tap_until = now + kThumbTap;
+            t.since = 0;
+        }
+        if (now < t.tap_until) p.buttons |= t.bit;
     }
     touch::Apply(port, p);
     if (app::kGame.pad) app::kGame.pad(port, p);
