@@ -13,6 +13,7 @@
 #include <unordered_map>
 
 #include "common/mouse_keyboard.h"
+#include "common/options.h"
 #include "common/translations.h"
 #include "game/flash.h"
 #include "xdk/hle.h"
@@ -35,6 +36,9 @@ constexpr uint32_t kConfirm = 0xE0CA7C5F;  // FE_CONFIRM
 constexpr uint32_t kBack = 0x64199B75;     // FE_BACK
 constexpr uint32_t kSelect = 0x12309FEF;   // FE_SELECT
 constexpr uint32_t kBackspace = 0x32D594BD;
+// the custom controls' black button's row, NONE: the black button jumps (game_info.cpp), the white one, NEXT MUSIC TRACK,
+// sprints; the Indonesian words are in strings_ind.inc and translations.cpp, these two are the English ones
+constexpr uint32_t kBlackButton = 0xBA06AB13;
 constexpr uint32_t kPressStart[] = {0x2FCCE936, 0x905E4EE0, 0x661A3A37};
 // a hint's "PRESS (A) :" strings, in the order the keyboard numbers the pad: A B X Y black white, the triggers,
 // dpad up down left right, start, back, the thumbs
@@ -157,6 +161,18 @@ X86_FUNC(sub_001F3A80) {
         static std::unordered_map<uint32_t, uint32_t> copies;
         auto [copy, made] = copies.try_emplace(id, 0);
         if (made) copy->second = GuestString(ind, std::strlen(ind) + 1);
+        if (copy->second) ctx.eax = copy->second;
+    }
+    // English: the same two rows in English, the white one found by its text (its id is not needed), copied once
+    if (game::BootLanguage() == "int") {
+        static std::unordered_map<uint32_t, uint32_t> english;  // id to its text in guest memory, 0 for none
+        auto [copy, made] = english.try_emplace(id, 0);
+        if (made) {
+            const char* text = nullptr;
+            if (id == kBlackButton) text = "JUMP";
+            else if (strcasecmp(ReadCString(ctx.eax, 64).c_str(), "NEXT MUSIC TRACK") == 0) text = "SPRINT";
+            if (text) copy->second = GuestString(text, std::strlen(text) + 1);
+        }
         if (copy->second) ctx.eax = copy->second;
     }
     auto [it, fresh] = g_wordings.try_emplace(uint64_t(id) << 2 | uint64_t(touch) << 1 | keyboard, 0);
