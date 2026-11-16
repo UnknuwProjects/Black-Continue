@@ -42,7 +42,7 @@ void PanelStep(int dir);  // menu.cpp: the d-pad's left (-1) or right (1), for t
 
 // native/menu.cpp: the settings panel's other page
 namespace app {
-void SwitchPanelPage();
+void SwitchPanelPage(int dir);  // -1 the page before (L1), 1 the page after (R1)
 }
 
 namespace input {
@@ -101,7 +101,7 @@ constexpr Target kActions[] = {
     {{"strafe_left", "STRAFE LEFT", "A"}, 18},
     {{"strafe_right", "STRAFE RIGHT", "D"}, 19},
     {{"walk", "WALK", "Alt"}, kWalk},
-    {{"crouch", "CROUCH", "C"}, 14},
+    {{"crouch", "CROUCH", "C,Ctrl"}, 14},
     {{"jump", "JUMP", "Space"}, kHostKey},
     {{"sprint", "SPRINT", "Shift"}, kHostKey},
     {{"fire", "FIRE", "LMB"}, 7},
@@ -115,7 +115,6 @@ constexpr Target kActions[] = {
     {{"suppressor", "TOGGLE SUPPRESSOR", "T"}, 3},
     {{"firing_mode", "FIRING MODE / SCOPE ZOOM", "X"}, 8},
     {{"health_pack", "HEALTH PACK", "H"}, 9},
-    {{"next_track", "NEXT MUSIC TRACK", "N"}, 5},
     {{"back", "OBJECTIVES", "Tab"}, 13},
     {{"pause", "PAUSE MENU", "Escape"}, 12},
     {{"hide_hud", "TOGGLE HUD", ""}, kHostKey},
@@ -1217,10 +1216,12 @@ void KeyEvent(const SDL_KeyboardEvent& k) {
 // a pad's two sticks pressed together open the settings panel as F10 does on a keyboard, and B closes it again. Polled
 // each turn of the event loop, so it needs no event of its own
 void PadPanel() {
-    static bool combo_held = false, back_held = false, tab_held = false;
+    static bool combo_held = false, back_held = false;
+    static int tab_held = 0;  // the page key down: -1 L1, 1 R1, 0 none
     static int step_held = 0;  // the d-pad's left (-1) or right (1) that is down
     static uint64_t step_next = 0;
-    bool combo = false, back = false, tab = false;
+    bool combo = false, back = false;
+    int tab = 0;
     int step = 0;
     int n = 0;
     if (SDL_JoystickID* ids = SDL_GetGamepads(&n)) {
@@ -1233,16 +1234,15 @@ void PadPanel() {
             if (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_EAST)) back = true;
             if (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_DPAD_LEFT)) step = -1;
             if (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_DPAD_RIGHT)) step = 1;
-            if (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER) ||
-                SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER))
-                tab = true;
+            if (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER)) tab = 1;
+            else if (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER) && tab == 0) tab = -1;
         }
         SDL_free(ids);
     }
     if (host::Foreground()) {
         if (combo && !combo_held) app::ToggleMenu();
         else if (back && !back_held && app::MenuOpen() && !app::Capturing()) app::ToggleMenu();
-        if (tab && !tab_held && app::MenuOpen() && !app::Capturing()) app::SwitchPanelPage();
+        if (tab && tab != tab_held && app::MenuOpen() && !app::Capturing()) app::SwitchPanelPage(tab);
         // a step on the press, then repeating while it is held
         uint64_t now = NowMs();
         if (step && app::MenuOpen() && !app::Capturing()) {
