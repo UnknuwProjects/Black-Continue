@@ -191,6 +191,29 @@ X86_FUNC(sub_001F3A80) {
     if (it->second) ctx.eax = it->second;
 }
 
+// The custom controls' check for two rows on one action (0x1200C0, the one that marks them in red) passes over a row whose
+// value is 0, which is NONE: two rows on NONE are never marked. NONE is the JUMP now, so two rows on it are marked as
+// two rows on any other action are. The check reads each row's value through the 18 pointers at 0x2EC790; for the length
+// of the call a 0 is a value of its own, and it is 0 again after.
+constexpr uint32_t kControlRows = 0x2EC790;
+constexpr int kControlCount = 18;
+constexpr uint32_t kJumpValue = 0x7FFFFFF0;  // no action has it
+
+X86_EXTERN_FUNC(__imp__sub_001200C0);
+X86_FUNC(sub_001200C0) {
+    uint32_t cells[kControlCount];
+    int count = 0;
+    for (int i = 0; i < kControlCount; i++) {
+        uint32_t cell = R32(kControlRows + i * 4);
+        if (!cell || R32(cell) != 0) continue;
+        if (std::find(cells, cells + count, cell) != cells + count) continue;  // a cell some rows share
+        cells[count++] = cell;
+        W32(cell, kJumpValue);
+    }
+    __imp__sub_001200C0(ctx, base);
+    for (int i = 0; i < count; i++) W32(cells[i], 0);
+}
+
 // the front end's tick, before the Flash player runs
 void MenuPrompts(X86Context& ctx, uint8_t*) {
     static int was = -1;
