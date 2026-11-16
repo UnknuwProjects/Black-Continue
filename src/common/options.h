@@ -50,7 +50,7 @@ struct Options {
     uint32_t fov = 70;  // horizontal degrees on a 4:3 frame, 70 is the game's
     uint32_t viewmodel_fov = 70;  // the gun and arms, the same measure
     uint32_t walk_speed = 50;  // percent of running, while the walk key is held
-    uint32_t sprint_speed = 200;  // percent of running while sprint is held, 200 to 500 (src/game/movement.cpp)
+    uint32_t sprint_speed = 150;  // percent of running while sprint is held, 150 to 1000 (src/game/movement.cpp)
     bool sprint_fov = true;  // the view widens a little while sprinting
     uint32_t sprint_pose = 1;  // the gun's pose while sprinting (ViewmodelShift in src/game/hooks.cpp): 0 off, 1 the built in pose, 2 SaveData/Sprint_Custom.txt
     bool noclip = false;  // cheat, NOCLIP: the player walks through walls and objects; gravity, floors and jump stay the game's (src/game/movement.cpp)
