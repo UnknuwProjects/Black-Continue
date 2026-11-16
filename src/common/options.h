@@ -83,8 +83,11 @@ struct Options {
     bool unlock_black_ops = false;  // cheat: Black Ops open on the missions open on another difficulty, the same
     uint32_t esp_style = 0;  // cheat: what is drawn on each living enemy in view: 0 off, 1 box, 2 line from the bottom of the screen, 3 both
     bool esp_arrows = false;  // cheat: an arrow on a ring round the middle towards each enemy out of the view
-    bool aimbot = false;  // cheat, AIM LOCK: aiming in turns the view to the head of the nearest enemy in view with nothing in the way
-    uint32_t aim_assist = 0;  // cheat: 0 off, 1 to 3 a pull of the view to an enemy near the crosshair while firing or aiming
+    bool aimbot = false;  // no longer read: AIM LOCK is aim_lock below
+    // cheat, AIM LOCK, while aiming in: 0 off; 1 ONLY ASSIST, the view turns to an enemy the crosshair came near and is let go on arrival;
+    // 2 AUTO LOCK, the view stays on that enemy until it dies (src/game/esp.cpp, Aimbot)
+    uint32_t aim_lock = 0;
+    uint32_t aim_assist = 0;  // cheat: 0 off, 1 to 3 a pull of the view to an enemy near the crosshair while firing
     uint32_t head_height = 90;  // percent: 90 is the middle of the head as measured, a step moves the point 1.8 cm; 1.80 m times it when no body was measured
     uint32_t aim_target = 0;  // cheat: where AIM LOCK turns to: 0 head, 1 body, 2 auto (the head while it is seen, else the body)
     uint32_t head_offset = 30;  // centimetres plus 30: 0 is 30 left on the screen, 30 none, 60 is 30 right
@@ -118,10 +121,6 @@ inline std::atomic<int> g_bat_level{-1};  // the battery's charge, percent
 // the crouch button of the pad (the touch crouch, bit 6 of the buttons), false while the panel is open: FLY goes down
 // with it (src/game/movement.cpp), written in game_info.cpp
 inline std::atomic<bool> g_crouch_held{false};
-// the pad's white (sprint) and black (jump) buttons, held: the game has no use for them, game_info.cpp takes them off the
-// pad and movement.cpp reads them with the touch controls and the keys
-inline std::atomic<bool> g_pad_sprint{false};
-inline std::atomic<bool> g_pad_jump{false};
 // the sprint's speed lines, 0 none .. 1 full (written by movement.cpp's hook, drawn by game::SprintLines from the UI)
 inline std::atomic<float> g_sprint_lines{0};
 // the sprint's gun pose, 0 hip .. 1 fully sprinting (movement.cpp's hook writes it, hooks.cpp's ViewmodelShift reads it)
