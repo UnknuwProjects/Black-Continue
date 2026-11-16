@@ -360,11 +360,7 @@ void AppendUtf8(std::string& out, char16_t c) {
 }  // namespace
 
 std::string app::Ui(std::string_view text, bool caps) {
-    if (Language() < 0) {
-        // English: the custom controls' rows of the white and the black button, which sprint and jump now
-        if (Same(text, "NEXT MUSIC TRACK")) return caps ? "SPRINT" : "Sprint";
-        return std::string(text);
-    }
+    if (Language() < 0) return std::string(text);
     // the panel's thread and the game's
     static std::mutex lock;
     static std::map<std::string, std::string> cache;
