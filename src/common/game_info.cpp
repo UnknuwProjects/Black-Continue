@@ -24,6 +24,10 @@ void Pad(int port, input::Pad& pad) {
     if (port != 0) return;
     const bool play = !app::MenuOpen();
     g_crouch_held = play && (pad.buttons & (1u << 6)) != 0;
+    // the white button sprints and the black one jumps: the game does not see them (analog 4 black, 5 white)
+    g_pad_sprint = play && pad.analog[5] > 0x80;
+    g_pad_jump = play && pad.analog[4] > 0x80;
+    if (play) pad.analog[4] = pad.analog[5] = 0;
     // sprint only ahead: the left stick (or W) pushed up, not further than 45 degrees to a side
     g_move_x = play ? std::clamp(pad.lx / 32767.0f, -1.0f, 1.0f) : 0.0f;
     g_move_y = play ? std::clamp(pad.ly / 32767.0f, -1.0f, 1.0f) : 0.0f;
