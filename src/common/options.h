@@ -118,6 +118,10 @@ inline std::atomic<int> g_bat_level{-1};  // the battery's charge, percent
 // the crouch button of the pad (the touch crouch, bit 6 of the buttons), false while the panel is open: FLY goes down
 // with it (src/game/movement.cpp), written in game_info.cpp
 inline std::atomic<bool> g_crouch_held{false};
+// the pad's white (sprint) and black (jump) buttons, held: the game has no use for them, game_info.cpp takes them off the
+// pad and movement.cpp reads them with the touch controls and the keys
+inline std::atomic<bool> g_pad_sprint{false};
+inline std::atomic<bool> g_pad_jump{false};
 // the sprint's speed lines, 0 none .. 1 full (written by movement.cpp's hook, drawn by game::SprintLines from the UI)
 inline std::atomic<float> g_sprint_lines{0};
 // the sprint's gun pose, 0 hip .. 1 fully sprinting (movement.cpp's hook writes it, hooks.cpp's ViewmodelShift reads it)
