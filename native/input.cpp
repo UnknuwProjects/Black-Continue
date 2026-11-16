@@ -228,15 +228,31 @@ Pad Poll(int port) {
     bool analog = std::any_of(std::begin(p.analog), std::end(p.analog), [](uint8_t a) { return a > 0x20; });
     if (p.buttons || analog || pushed(p.lx) || pushed(p.ly) || pushed(p.rx) || pushed(p.ry)) touch::PadUsed();
     // the open panel takes the pad: the game sees it connected but untouched
-    // B closes the panel: until it is let go the game does not see it, or the close would also be a melee
-    static bool s_hold_b = false;
+    // What was down while the panel was open, or as it closed (B, or the two sticks that close it as well), stays hidden
+    // from the game until it is let go, or the close would also be a melee, a crouch and so on. Kept for each port: the
+    // game polls all four, and a port with no pad must not clear the hold of the one that has it
+    struct Hold {
+        uint16_t buttons = 0;
+        uint8_t analog[8] = {};
+    };
+    static Hold s_hold[4];
     if (app::MenuOpen()) {
         p = Pad{};
         p.connected = true;
-        s_hold_b = true;
-    } else if (s_hold_b) {
-        if (p.analog[1]) p.analog[1] = 0;
-        else s_hold_b = false;
+        if (port >= 0 && port < 4) {
+            s_hold[port].buttons = 0xFFFF;
+            std::fill(std::begin(s_hold[port].analog), std::end(s_hold[port].analog), uint8_t(0xFF));
+        }
+    } else if (port >= 0 && port < 4) {
+        Hold& h = s_hold[port];
+        // the two sticks pressed together open the panel: the game does not get them in the frames before it is open
+        if ((p.buttons & 0xC0) == 0xC0) h.buttons |= 0xC0;
+        h.buttons &= p.buttons;
+        p.buttons &= uint16_t(~h.buttons);
+        for (int i = 0; i < 8; i++) {
+            if (p.analog[i] <= 0x20) h.analog[i] = 0;
+            else if (h.analog[i]) p.analog[i] = 0;
+        }
     }
     touch::Apply(port, p);
     if (app::kGame.pad) app::kGame.pad(port, p);
