@@ -204,7 +204,8 @@ constexpr Entry kEntries[] = {
     {"TOGGLE SUPPRESSOR", {u"Mettre / retirer le silencieux", u"Schalldämpfer an / ab", u"Monta / smonta silenziatore", u"Poner / quitar silenciador", u"Pasang/lepas peredam"}},
     {"FIRING MODE / SCOPE ZOOM", {u"Mode de tir / zoom de la lunette", u"Feuermodus / Zielfernrohr-Zoom", u"Modalità di fuoco / Zoom mirino", u"Modo de disparo / Zoom de la mira", u"Mode tembak/zoom teropong"}},
     {"HEALTH PACK", {u"Trousse de soins", u"Medipack", u"Kit medico", u"Botiquín", u"P3K"}},
-    {"NEXT MUSIC TRACK", {u"Morceau suivant", u"Nächster Musiktitel", u"Brano successivo", u"Siguiente pista de música", u"Lagu berikutnya"}},
+    // the white button's row in the game's custom controls (it was NEXT MUSIC TRACK): the white button sprints now
+    {"NEXT MUSIC TRACK", {u"Sprint", u"Sprint", u"Sprint", u"Sprint", u"Sprint"}},
     {"OBJECTIVES", {u"Objectifs", u"Ziele", u"Obiettivi", u"Objetivos", u"Tujuan misi"}},
     {"PAUSE MENU", {u"Menu pause", u"Pausenmenü", u"Menu di pausa", u"Menú de pausa", u"Menu jeda"}},
     {"TOGGLE HUD", {u"Afficher / masquer l'interface", u"HUD ein / aus", u"Mostra / nascondi HUD", u"Mostrar / ocultar HUD", u"Tampil/sembunyikan HUD"}},
@@ -359,7 +360,11 @@ void AppendUtf8(std::string& out, char16_t c) {
 }  // namespace
 
 std::string app::Ui(std::string_view text, bool caps) {
-    if (Language() < 0) return std::string(text);
+    if (Language() < 0) {
+        // English: the custom controls' rows of the white and the black button, which sprint and jump now
+        if (Same(text, "NEXT MUSIC TRACK")) return caps ? "SPRINT" : "Sprint";
+        return std::string(text);
+    }
     // the panel's thread and the game's
     static std::mutex lock;
     static std::map<std::string, std::string> cache;
