@@ -170,6 +170,7 @@ const app::GameInfo app::kGame = {
                 {"esp_width", nullptr, &game::Opt().esp_width},
                 {"head_offset", nullptr, &game::Opt().head_offset},
                 {"aimbot", &game::Opt().aimbot, nullptr},
+                {"aim_lock", nullptr, &game::Opt().aim_lock},
                 {"aim_assist", nullptr, &game::Opt().aim_assist},
                 {"esp_label", nullptr, &game::Opt().esp_label},
                 {"esp_health", &game::Opt().esp_health, nullptr},
