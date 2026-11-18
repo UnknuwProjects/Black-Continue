@@ -130,7 +130,7 @@ bool NearOpen(const float* p);
 bool NearTake();
 
 // the enemies the ESP has seen that were alive at the last call and are dead now: which enemy died as a destroy was credited.
-// The enemies are the ones the ESP sees, so an enemy ESP part or an aim cheat must be on
+// The enemies are the ones the ESP sees, so an enemy ESP part, an aim cheat or OBJECTIVE ESP must be on
 struct EnemyDeath {
     uint32_t who;
 };
